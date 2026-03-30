@@ -2,11 +2,76 @@
 
 ---
 
-[![Hex.pm](https://img.shields.io/hexpm/v/shopifex.svg)](https://hex.pm/packages/shopifex)
+A simple boilerplate package for creating Shopify embedded apps with the Elixir Phoenix framework.
 
-A simple boilerplate package for creating Shopify embedded apps with the Elixir Phoenix framework. [https://hexdocs.pm/shopifex](https://hexdocs.pm/shopifex)
+> **This is a fork** of [ericdude4/shopifex](https://github.com/ericdude4/shopifex) (v2.4.0). See [Why this fork exists](#why-this-fork-exists) below.
 
-## Installation
+## Installation (fork)
+
+```elixir
+def deps do
+  [
+    {:shopifex, github: "josefrichter/shopifex"}
+  ]
+end
+```
+
+If you want the original upstream package from Hex instead, use `{:shopifex, "~> 2.4"}`.
+
+## Why this fork exists
+
+**Forked in March 2026** to add support for Shopify's modern embedded app architecture.
+
+### The problem
+
+Shopify has moved to **managed app installation** and **session tokens** as the default for all embedded apps. The key changes:
+
+- **Managed installation** — Shopify sends an `id_token` JWT on app load instead of the traditional OAuth authorization code redirect. The app must exchange this token for an offline access token via [RFC 8693 token exchange](https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/token-exchange).
+- **Session tokens** — Embedded apps run in an iframe where browsers block third-party cookies. Auth must work without cookies. Shopify's App Bridge provides session tokens via `shopify.idToken()`.
+- **No more OAuth redirects in iframes** — The old OAuth install flow (redirect to Shopify → approve scopes → redirect back) breaks inside iframes. Managed installation handles this transparently.
+
+Upstream Shopifex (v2.4.0) only supports the traditional OAuth code exchange flow and passes Guardian JWT tokens in URL parameters for session management. This doesn't work for new Shopify apps that use managed installation.
+
+### What this fork adds
+
+| Feature | Description |
+|---|---|
+| **`Shopifex.Plug.ManagedInstall`** | New plug that intercepts `id_token` from Shopify, exchanges it for an offline access token, and creates the shop record. Drop it into your pipeline before `ShopifySession`. |
+| **`:embedded` LiveView on_mount** | `ShopifexWeb.LiveSession` now has an `:embedded` hook that reads the shop from the Phoenix session without requiring tokens in URLs or LiveSocket connect params. |
+| **`:managed_install` pipeline** | Available via `ShopifexWeb.Routes.pipelines/0` for easy router setup. |
+| **HTTPoison → Req** | All HTTP calls replaced with [Req](https://hex.pm/packages/req) (modern Elixir HTTP client). |
+
+### Why not upstream?
+
+Upstream Shopifex is sparsely maintained — roughly one commit every few months since 2023, single maintainer. A [PR for Shopify CLI compatibility](https://github.com/ericdude4/shopifex/pull/81) has been open since March 2025. The changes needed here are fundamental (new auth flow, new plug, dependency swap), not small patches, and waiting for upstream review wasn't viable.
+
+### Why not other Elixir Shopify libraries?
+
+We evaluated every Shopify-related Elixir package on Hex and GitHub (as of March 2026):
+
+| Library | What it is | Why it didn't work |
+|---|---|---|
+| **[shopifex](https://github.com/ericdude4/shopifex)** (upstream) | Full framework — OAuth, webhooks, billing, session management | Only supports traditional OAuth, not managed installation. This fork fixes that. |
+| **[shopify_graphql](https://github.com/malomohq/shopify-graphql-elixir)** | GraphQL API client | API client only — no auth, no webhooks, no app framework. Complementary, not a replacement. |
+| **[shopify](https://github.com/nsweeting/shopify)** (nsweeting) | REST API client | Abandoned since 2019. Uses HTTPoison + Poison. No GraphQL. |
+| **[exshopify](https://github.com/sticksnleaves/exshopify)** | REST API client with OAuth | Inactive since 2021. |
+| **[ex_shopify_app](https://hex.pm/packages/ex_shopify_app)** | Framework attempt | 0 stars, 7 commits, GPL licensed, no documentation. |
+| **[ueberauth_shopify](https://hex.pm/packages/ueberauth_shopify)** | Ueberauth OAuth strategy | Traditional OAuth only — exactly what Shopify is moving away from. |
+| **[plug_shopify_jwt](https://hex.pm/packages/plug_shopify_jwt)** | JWT validation plug | Tiny, last updated 2021. |
+
+**Shopifex is the only viable full framework for Shopify apps in Elixir.** The ecosystem is thin compared to Node.js (official `@shopify/shopify-app-js`) or Ruby (official `shopify_api` gem). Forking was the only practical path.
+
+### Existing shopifex forks
+
+We also checked all active forks of upstream shopifex. None had implemented managed installation or replaced the Guardian JWT auth flow:
+
+- **briansage/shopifex** — Phoenix 1.7+ compat fixes, CSP improvements. Still uses Guardian JWT.
+- **NexPB/shopifex** — Shopify CLI webhook management (PR #81). Traditional OAuth, not token exchange.
+- **helording/shopifex**, **pepicrft/shopifex** — minor variations of NexPB's changes.
+
+---
+
+## Original Installation
 
 The package can be installed
 by adding `shopifex` to your list of dependencies in `mix.exs`: (note, OTP 22 or greater required)
