@@ -36,8 +36,35 @@ defmodule ShopifexWeb.LiveSession do
   end
 
   @doc """
-  Add the current_shop and session_token to assigns making them available
-  in live view templates.
+  LiveView on_mount hooks for Shopify apps.
+
+  ## `:assign_shop_to_socket` (default)
+
+  Assigns `current_shop` and `session_token` from session to socket assigns.
+  Use with the standard `shopifex_live_session` macro.
+
+  ## `:embedded`
+
+  Simplified hook for embedded Shopify apps where third-party cookies are
+  blocked. Reads the shop from the session (set during the HTTP request by
+  `put_shop_in_session/1`) and does NOT require tokens in URLs or LiveSocket
+  connect params. Redirects to `/auth` if no shop is found.
+
+  ### How it works
+
+  1. HTTP request arrives with `id_token` from App Bridge
+  2. `ManagedInstall` plug validates the token and builds a Shopifex session
+  3. `put_shop_in_session/1` serializes the shop into the LiveView session
+  4. This hook reads the shop from the session — no tokens needed
+
+  Within a `live_session`, LiveView preserves the session across navigations.
+  Full page loads get a fresh `id_token` from App Bridge automatically.
+
+  ### Usage
+
+      live_session :my_app,
+        on_mount: [{ShopifexWeb.LiveSession, :embedded}],
+        session: {ShopifexWeb.LiveSession, :put_shop_in_session, []}
   """
   def on_mount(:assign_shop_to_socket, _params, session, socket) do
     assigns = %{
@@ -46,5 +73,16 @@ defmodule ShopifexWeb.LiveSession do
     }
 
     {:cont, Phoenix.Component.assign(socket, assigns)}
+  end
+
+  @compile {:no_warn_undefined, Phoenix.LiveView}
+  def on_mount(:embedded, _params, session, socket) do
+    shop = session["current_shop"]
+
+    if shop do
+      {:cont, Phoenix.Component.assign(socket, current_shop: shop, session_token: nil)}
+    else
+      {:halt, Phoenix.LiveView.redirect(socket, to: "/auth")}
+    end
   end
 end

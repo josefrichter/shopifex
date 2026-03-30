@@ -145,22 +145,17 @@ defmodule ShopifexWeb.AuthController do
         state = Map.get(params, "state", "")
         url = build_external_url(["https://", shop_url, "/admin/oauth/access_token"])
 
-        case(
-          HTTPoison.post(
-            url,
-            Jason.encode!(%{
-              client_id: Application.fetch_env!(:shopifex, :api_key),
-              client_secret: Application.fetch_env!(:shopifex, :secret),
-              code: code
-            }),
-            "Content-Type": "application/json",
-            Accept: "application/json"
-          )
-        ) do
-          {:ok, response} ->
+        case Req.post(url,
+               json: %{
+                 client_id: Application.fetch_env!(:shopifex, :api_key),
+                 client_secret: Application.fetch_env!(:shopifex, :secret),
+                 code: code
+               }
+             ) do
+          {:ok, %{status: 200, body: body}} ->
             params =
-              response.body
-              |> Jason.decode!(keys: :atoms)
+              body
+              |> Map.new(fn {k, v} -> {String.to_atom(k), v} end)
               |> Map.put(:url, shop_url)
 
             params = Map.put(params, Shopifex.Shops.get_scope_field(), params[:scope])
@@ -171,7 +166,7 @@ defmodule ShopifexWeb.AuthController do
 
             after_install(conn, shop, state)
 
-          error ->
+          _error ->
             raise(Shopifex.InstallError, message: "Installation failed for shop #{shop_url}")
         end
       end
@@ -189,20 +184,17 @@ defmodule ShopifexWeb.AuthController do
         state = Map.get(params, "state", "")
         url = build_external_url(["https://", shop_url, "/admin/oauth/access_token"])
 
-        case(
-          HTTPoison.post(
-            url,
-            Jason.encode!(%{
-              client_id: Application.fetch_env!(:shopifex, :api_key),
-              client_secret: Application.fetch_env!(:shopifex, :secret),
-              code: code
-            }),
-            "Content-Type": "application/json",
-            Accept: "application/json"
-          )
-        ) do
-          {:ok, response} ->
-            params = Jason.decode!(response.body, keys: :atoms)
+        case Req.post(url,
+               json: %{
+                 client_id: Application.fetch_env!(:shopifex, :api_key),
+                 client_secret: Application.fetch_env!(:shopifex, :secret),
+                 code: code
+               }
+             ) do
+          {:ok, %{status: 200, body: body}} ->
+            params =
+              body
+              |> Map.new(fn {k, v} -> {String.to_atom(k), v} end)
 
             params = Map.put(params, Shopifex.Shops.get_scope_field(), params[:scope])
 
@@ -215,7 +207,7 @@ defmodule ShopifexWeb.AuthController do
 
             after_update(conn, shop, state)
 
-          error ->
+          _error ->
             raise(Shopifex.UpdateError, message: "Update failed for shop #{shop_url}")
         end
       end

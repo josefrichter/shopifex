@@ -1,11 +1,7 @@
 defmodule Shopifex.ShopsTest do
   use Shopifex.DataCase, async: true
   alias Shopifex.Shops
-  use ExVCR.Mock, adapter: ExVCR.Adapter.Hackney
-
-  setup_all do
-    HTTPoison.start()
-  end
+  use ExVCR.Mock, adapter: ExVCR.Adapter.Finch
 
   @valid_shop_params %{
     url: "shopifex-test.myshopify.com",

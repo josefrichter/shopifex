@@ -139,46 +139,60 @@ defmodule Shopifex.ShopsContext do
       @doc """
       Returns the current webhooks for a Shop from the Shopify API.
 
-      Returns with `{:ok, webhooks}` on success. Can also return any
-      non-200 level HTTPoison response, or a Jason decode error.
+      Returns with `{:ok, webhooks}` on success.
       """
       @spec get_current_webhooks(shop :: shop()) :: {:ok, list()} | any()
       def get_current_webhooks(shop) do
-        with {:ok, %HTTPoison.Response{status_code: 200, body: body}} <-
-               HTTPoison.get(
-                 "https://#{get_url(shop)}/admin/api/2026-01/webhooks.json",
-                 "X-Shopify-Access-Token": shop.access_token,
-                 "Content-Type": "application/json"
-               ),
-             {:ok, %{webhooks: webhooks}} <- Jason.decode(body, keys: :atoms) do
-          {:ok, webhooks}
+        case Req.get(
+               "https://#{get_url(shop)}/admin/api/2026-01/webhooks.json",
+               headers: [
+                 {"x-shopify-access-token", shop.access_token},
+                 {"content-type", "application/json"}
+               ]
+             ) do
+          {:ok, %{status: 200, body: %{"webhooks" => webhooks}}} ->
+            {:ok, Enum.map(webhooks, &atomize_keys/1)}
+
+          other ->
+            other
         end
       end
 
       defp create_webhook(shop, topic) do
-        with {:ok, %HTTPoison.Response{status_code: 201, body: body}} <-
-               HTTPoison.post(
-                 "https://#{get_url(shop)}/admin/api/2026-01/webhooks.json",
-                 Jason.encode!(%{
-                   webhook: %{
-                     topic: topic,
-                     address: "#{Application.get_env(:shopifex, :webhook_uri)}",
-                     format: "json"
-                   }
-                 }),
-                 "X-Shopify-Access-Token": shop.access_token,
-                 "Content-Type": "application/json"
-               ),
-             {:ok, %{webhook: webhook}} <- Jason.decode(body, keys: :atoms) do
-          {:ok, webhook}
+        case Req.post(
+               "https://#{get_url(shop)}/admin/api/2026-01/webhooks.json",
+               json: %{
+                 webhook: %{
+                   topic: topic,
+                   address: "#{Application.get_env(:shopifex, :webhook_uri)}",
+                   format: "json"
+                 }
+               },
+               headers: [
+                 {"x-shopify-access-token", shop.access_token}
+               ]
+             ) do
+          {:ok, %{status: 201, body: %{"webhook" => webhook}}} ->
+            {:ok, atomize_keys(webhook)}
+
+          other ->
+            other
         end
       end
 
+      defp atomize_keys(map) when is_map(map) do
+        Map.new(map, fn {k, v} -> {String.to_atom(k), v} end)
+      end
+
+      defp atomize_keys(other), do: other
+
       def delete_webhook(shop, id) do
-        HTTPoison.delete(
+        Req.delete(
           "https://#{get_url(shop)}/admin/api/2026-01/webhooks/#{id}.json",
-          "X-Shopify-Access-Token": shop.access_token,
-          "Content-Type": "application/json"
+          headers: [
+            {"x-shopify-access-token", shop.access_token},
+            {"content-type", "application/json"}
+          ]
         )
       end
 

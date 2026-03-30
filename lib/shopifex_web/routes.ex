@@ -34,6 +34,10 @@ defmodule ShopifexWeb.Routes do
         plug(Shopifex.Plug.LoadInIframe)
       end
 
+      pipeline :managed_install do
+        plug(Shopifex.Plug.ManagedInstall)
+      end
+
       pipeline :shopify_session do
         plug(Shopifex.Plug.ShopifySession)
         plug(Shopifex.Plug.EnsureScopes)

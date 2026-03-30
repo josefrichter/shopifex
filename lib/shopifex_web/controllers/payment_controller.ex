@@ -157,14 +157,16 @@ defmodule ShopifexWeb.PaymentController do
             }
           })
 
-        case HTTPoison.post(
+        case Req.post(
                "https://#{Shopifex.Shops.get_url(shop)}/admin/api/2024-01/recurring_application_charges.json",
-               body,
-               "X-Shopify-Access-Token": shop.access_token,
-               "Content-Type": "application/json"
+               json: Jason.decode!(body),
+               headers: [{"x-shopify-access-token", shop.access_token}]
              ) do
+          {:ok, %{status: 201, body: %{"recurring_application_charge" => charge}}} ->
+            {:ok, charge}
+
           {:ok, resp} ->
-            {:ok, Jason.decode!(resp.body)["recurring_application_charge"]}
+            {:ok, resp.body["recurring_application_charge"]}
         end
       end
 
@@ -182,14 +184,16 @@ defmodule ShopifexWeb.PaymentController do
             }
           })
 
-        case HTTPoison.post(
+        case Req.post(
                "https://#{Shopifex.Shops.get_url(shop)}/admin/api/2024-01/application_charges.json",
-               body,
-               "X-Shopify-Access-Token": shop.access_token,
-               "Content-Type": "application/json"
+               json: Jason.decode!(body),
+               headers: [{"x-shopify-access-token", shop.access_token}]
              ) do
+          {:ok, %{status: 201, body: %{"application_charge" => charge}}} ->
+            {:ok, charge}
+
           {:ok, resp} ->
-            {:ok, Jason.decode!(resp.body)["application_charge"]}
+            {:ok, resp.body["application_charge"]}
         end
       end
 
