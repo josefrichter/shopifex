@@ -16,9 +16,10 @@ defmodule Mix.Shopifex.Config do
     webhook_uri: "<%= tunnel_url %>/webhook",
     payment_redirect_uri: "<%= tunnel_url %>/payment/complete",
     scopes: "read_products",
+    api_version: "2026-04", # Shopify Admin API version used for all GraphQL calls
     api_key: "your_shopify_api_key", #TODO: update
     secret: "shopifyapisecret456", #TODO: update
-    webhook_topics: ["app/uninstalled"] # These are automatically subscribed on a store upon install
+    webhook_topics: ["app/uninstalled"] # Subscribed via GraphQL on install. GDPR/compliance topics belong in shopify.app.toml, not here.
   """
 
   def gen(opts), do: EEx.eval_string(@template, opts)

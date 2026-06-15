@@ -4,7 +4,7 @@ defmodule Shopifex.MixProject do
   def project do
     [
       app: :shopifex,
-      version: "2.5.0",
+      version: "3.0.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       compilers: Mix.compilers(),
@@ -19,7 +19,7 @@ defmodule Shopifex.MixProject do
         links: %{
           "GitHub" => "https://github.com/ericdude4/shopifex"
         },
-        files: ~w(lib priv LICENSE mix.exs README.md )
+        files: ~w(lib priv LICENSE mix.exs README.md CHANGELOG.md )
       ],
       # Docs
       name: "Shopifex",
@@ -29,7 +29,7 @@ defmodule Shopifex.MixProject do
         # The main page in the docs
         main: "Shopifex",
         logo: "guides/images/s.png",
-        extras: ["README.md"],
+        extras: ["README.md", "CHANGELOG.md"],
         filter_prefix: "Shopifex"
       ]
     ]
@@ -61,8 +61,7 @@ defmodule Shopifex.MixProject do
       {:jose, "~> 1.11"},
       {:ex_doc, "~> 0.14", only: :dev, runtime: false},
       {:cors_plug, "~> 2.0"},
-      {:req, "~> 0.5"},
-      {:exvcr, "~> 0.17", only: :test}
+      {:req, "~> 0.5"}
     ]
   end
 
