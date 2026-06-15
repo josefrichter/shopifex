@@ -1,7 +1,6 @@
 defmodule Shopifex.ShopsTest do
   use Shopifex.DataCase, async: true
   alias Shopifex.Shops
-  use ExVCR.Mock, adapter: ExVCR.Adapter.Finch
 
   @valid_shop_params %{
     url: "shopifex-test.myshopify.com",
@@ -23,42 +22,60 @@ defmodule Shopifex.ShopsTest do
   end
 
   describe "configure_webhooks/1" do
-    test "subscribes shop to webhooks which it isn't subscribed to", %{shop: shop} do
-      use_cassette "default_webhooks" do
-        assert {:ok,
-                [
-                  %{
-                    topic: "app/uninstalled"
-                  }
-                ]} = Shops.get_current_webhooks(shop)
-      end
-
-      use_cassette "configure_webhooks", match_requests_on: [:request_body] do
-        assert [
-                 %{
-                   topic: "orders/create"
-                 },
-                 %{
-                   topic: "carts/update"
-                 }
-               ] = Shops.configure_webhooks(shop)
-      end
-
-      use_cassette "all_webhooks" do
-        assert {:ok,
-                [
-                  %{
-                    topic: "app/uninstalled"
-                  },
-                  %{
-                    topic: "carts/update"
-                  },
-                  %{
-                    topic: "orders/create"
-                  }
-                ]} = Shops.get_current_webhooks(shop)
-      end
+    # webhook_topics in test config: ["app/uninstalled", "orders/create", "carts/update"]
+    test "get_current_webhooks/1 returns subscriptions via GraphQL (enum topics)", %{shop: shop} do
+      stub_webhooks(current: ["APP_UNINSTALLED"])
+      assert {:ok, [%{topic: "APP_UNINSTALLED"}]} = Shops.get_current_webhooks(shop)
     end
+
+    test "subscribes shop only to the missing topics", %{shop: shop} do
+      stub_webhooks(current: ["APP_UNINSTALLED"])
+
+      created_topics =
+        shop
+        |> Shops.configure_webhooks()
+        |> Enum.map(& &1.topic)
+        |> Enum.sort()
+
+      assert created_topics == ["carts/update", "orders/create"]
+    end
+
+    test "subscribes to nothing when all topics already configured", %{shop: shop} do
+      stub_webhooks(current: ["APP_UNINSTALLED", "ORDERS_CREATE", "CARTS_UPDATE"])
+      assert [] = Shops.configure_webhooks(shop)
+    end
+  end
+
+  # Stub the GraphQL endpoint: the `webhookSubscriptions` query returns the
+  # given current enum topics; `webhookSubscriptionCreate` mutations succeed.
+  defp stub_webhooks(current: current_topics) do
+    edges =
+      Enum.with_index(current_topics, fn topic, i ->
+        %{"node" => %{"id" => "gid://shopify/WebhookSubscription/#{i}", "topic" => topic}}
+      end)
+
+    Req.Test.stub(Shopifex.ReqStub, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      query = Jason.decode!(body)["query"]
+
+      cond do
+        String.contains?(query, "webhookSubscriptions(first") ->
+          Req.Test.json(conn, %{"data" => %{"webhookSubscriptions" => %{"edges" => edges}}})
+
+        String.contains?(query, "webhookSubscriptionCreate") ->
+          Req.Test.json(conn, %{
+            "data" => %{
+              "webhookSubscriptionCreate" => %{
+                "webhookSubscription" => %{"id" => "gid://shopify/WebhookSubscription/new"},
+                "userErrors" => []
+              }
+            }
+          })
+
+        true ->
+          Req.Test.json(conn, %{"data" => %{}})
+      end
+    end)
   end
 
   describe "schema helpers" do

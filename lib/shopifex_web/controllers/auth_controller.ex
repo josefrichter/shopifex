@@ -89,8 +89,10 @@ defmodule ShopifexWeb.AuthController do
       def auth(conn, _) do
         path_prefix = Application.get_env(:shopifex, :path_prefix, "")
 
-        conn
-        |> redirect(to: path_prefix <> "/?token=" <> Guardian.Plug.current_token(conn))
+        # The session is already established by the `:shopify_session` pipeline
+        # (via the Shopify `id_token`). Embedded apps receive a fresh id_token on
+        # every page load, so no app-issued token needs to be carried here.
+        redirect(conn, to: path_prefix <> "/")
       end
 
       def initialize_installation(conn, %{"shop" => shop_url} = params) do

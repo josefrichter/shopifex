@@ -9,27 +9,25 @@ defmodule Shopifex.Plug.ShopifySession do
   end
 
   def call(conn, _) do
-    token = get_token_from_conn(conn) || Guardian.Plug.current_token(conn)
+    case authenticate_session_token(conn) do
+      {:ok, shop} ->
+        Shopifex.Plug.build_session(conn, shop, get_host(conn), get_locale(conn))
 
-    case Shopifex.Guardian.resource_from_token(token) do
-      {:ok, shop, claims} ->
-        locale = get_locale(conn, claims)
-        host = get_host(conn, claims)
-
-        Shopifex.Plug.build_session(conn, shop, host, locale)
-
-      _ ->
+      :error ->
         initiate_new_session(conn)
     end
   end
 
-  defp get_token_from_conn(%Plug.Conn{params: %{"token" => token}}), do: token
-
-  defp get_token_from_conn(conn) do
-    case Plug.Conn.get_req_header(conn, "authorization") do
-      [] -> nil
-      ["Bearer " <> token | []] -> token
-      _ -> nil
+  # Verify the Shopify App Bridge session token (`id_token`) and resolve the
+  # shop it identifies. Replaces the Guardian token verification used in
+  # Shopifex v2.
+  defp authenticate_session_token(conn) do
+    with token when is_binary(token) <- Shopifex.Plug.session_token(conn),
+         {:ok, %{"dest" => "https://" <> shop_url}} <- Shopifex.SessionToken.verify(token),
+         shop when not is_nil(shop) <- Shopifex.Shops.get_shop_by_url(shop_url) do
+      {:ok, shop}
+    else
+      _ -> :error
     end
   end
 
@@ -86,15 +84,9 @@ defmodule Shopifex.Plug.ShopifySession do
     |> halt()
   end
 
-  defp get_locale(conn, token_claims \\ %{})
-  defp get_locale(%Plug.Conn{params: %{"locale" => locale}}, _token_claims), do: locale
+  defp get_locale(%Plug.Conn{params: %{"locale" => locale}}), do: locale
+  defp get_locale(_conn), do: Application.get_env(:shopifex, :default_locale, "en")
 
-  defp get_locale(_conn, token_claims),
-    do: Map.get(token_claims, "loc", Application.get_env(:shopifex, :default_locale, "en"))
-
-  defp get_host(conn, token_claims \\ %{})
-  defp get_host(%Plug.Conn{params: %{"host" => host}}, _token_claims), do: host
-
-  defp get_host(_conn, token_claims),
-    do: Map.get(token_claims, "host")
+  defp get_host(%Plug.Conn{params: %{"host" => host}}), do: host
+  defp get_host(_conn), do: nil
 end

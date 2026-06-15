@@ -12,7 +12,7 @@ defmodule Mix.Shopifex.Schema do
     @foreign_key_type :binary_id<% end %>
     schema <%= inspect schema.table %> do
       <%= for {k, v} <- schema.attrs do %>field <%= inspect k %>, <%= inspect (if v == :bigint do :integer else v end) %>
-      <% end %><%= for {k, v, o} <- schema.attrs do %>field <%= inspect k %>, <%= inspect (if v == :bigint do :integer else v end) %>, <%= inspect o %>
+      <% end %><%= for {k, v, o} <- schema.attrs do %>field <%= inspect k %>, <%= inspect (if v == :bigint do :integer else v end) %><%= (field_opts = Keyword.delete(o, :null); if field_opts == [], do: "", else: ", " <> inspect(field_opts)) %>
       <% end %><%= for assoc <- schema.assocs do %>
       <%= assoc.type %> <%= inspect assoc.relation %>, <%= inspect assoc.related_schema %>, foreign_key: <%= inspect assoc.foreign_key %>
       <% end %>

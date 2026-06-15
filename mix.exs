@@ -59,10 +59,9 @@ defmodule Shopifex.MixProject do
       {:phoenix_html, ">= 4.0.0"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.0"},
+      {:jose, "~> 1.11"},
       {:plug_cowboy, "~> 2.0"},
       {:ex_doc, "~> 0.14", only: :dev, runtime: false},
-      {:guardian, "~> 2.0"},
-      {:neuron, "~> 5.1.0"},
       {:cors_plug, "~> 2.0"},
       {:req, "~> 0.5"},
       {:exvcr, "~> 0.17", only: :test}

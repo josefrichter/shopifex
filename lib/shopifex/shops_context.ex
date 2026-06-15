@@ -101,57 +101,72 @@ defmodule Shopifex.ShopsContext do
       end
 
       @doc """
-      Check the webhooks set on the shop, then compare that to the required webhooks based on the current
-      status of the shop.
+      Ensures the shop is subscribed to every topic in
+      `config :shopifex, :webhook_topics`, creating any that are missing via the
+      GraphQL `webhookSubscriptionCreate` mutation.
 
-      Returns a list of webhooks which were created.
+      Returns a list of the webhooks which were created (with app-facing
+      REST-style topic strings, e.g. `"orders/create"`).
       """
       def configure_webhooks(shop) do
         with {:ok, current_webhooks} <- get_current_webhooks(shop) do
-          current_webhook_topics = Enum.map(current_webhooks, & &1.topic)
+          current_topics = current_webhooks |> Enum.map(& &1.topic) |> MapSet.new()
 
           Logger.info(
-            "All current webhook topics for #{get_url(shop)}: #{Enum.join(current_webhook_topics, ", ")}"
+            "All current webhook topics for #{get_url(shop)}: #{Enum.join(MapSet.to_list(current_topics), ", ")}"
           )
 
-          current_webhook_topics = MapSet.new(current_webhook_topics)
+          desired_topics = Application.fetch_env!(:shopifex, :webhook_topics)
 
-          topics = MapSet.new(Application.fetch_env!(:shopifex, :webhook_topics))
+          Enum.reduce(desired_topics, [], fn topic, acc ->
+            if MapSet.member?(current_topics, webhook_topic_to_graphql(topic)) do
+              acc
+            else
+              Logger.info("Subscribing to topic #{topic}")
 
-          # Make sure all the required topics are configured.
-          subscribe_to_topics = MapSet.difference(topics, current_webhook_topics)
+              case create_webhook(shop, topic) do
+                {:ok, webhook} ->
+                  [webhook | acc]
 
-          Enum.reduce(subscribe_to_topics, [], fn topic, acc ->
-            Logger.info("Subscribing to topic #{topic}")
-
-            case create_webhook(shop, topic) do
-              {:ok, webhook} ->
-                [webhook | acc]
-
-              error ->
-                Logger.info("Error subscribing to topic #{topic}: \n#{inspect(error)}")
-                acc
+                error ->
+                  Logger.info("Error subscribing to topic #{topic}: \n#{inspect(error)}")
+                  acc
+              end
             end
           end)
         end
       end
 
       @doc """
-      Returns the current webhooks for a Shop from the Shopify API.
+      Returns the shop's current webhook subscriptions via the GraphQL
+      `webhookSubscriptions` query.
 
-      Returns with `{:ok, webhooks}` on success.
+      Topics come back as Shopify GraphQL enum values (e.g. `"ORDERS_CREATE"`),
+      which is the authoritative form `configure_webhooks/1` compares against.
+
+      Returns `{:ok, webhooks}` on success.
       """
       @spec get_current_webhooks(shop :: shop()) :: {:ok, list()} | any()
       def get_current_webhooks(shop) do
-        case Req.get(
-               "https://#{get_url(shop)}/admin/api/2026-01/webhooks.json",
-               headers: [
-                 {"x-shopify-access-token", shop.access_token},
-                 {"content-type", "application/json"}
-               ]
-             ) do
-          {:ok, %{status: 200, body: %{"webhooks" => webhooks}}} ->
-            {:ok, Enum.map(webhooks, &atomize_keys/1)}
+        query = """
+        query {
+          webhookSubscriptions(first: 100) {
+            edges {
+              node {
+                id
+                topic
+              }
+            }
+          }
+        }
+        """
+
+        case Shopifex.API.graphql(shop, query) do
+          {:ok, %{"webhookSubscriptions" => %{"edges" => edges}}} ->
+            {:ok,
+             Enum.map(edges, fn %{"node" => %{"id" => id, "topic" => topic}} ->
+               %{id: id, topic: topic}
+             end)}
 
           other ->
             other
@@ -159,41 +174,86 @@ defmodule Shopifex.ShopsContext do
       end
 
       defp create_webhook(shop, topic) do
-        case Req.post(
-               "https://#{get_url(shop)}/admin/api/2026-01/webhooks.json",
-               json: %{
-                 webhook: %{
-                   topic: topic,
-                   address: "#{Application.get_env(:shopifex, :webhook_uri)}",
-                   format: "json"
-                 }
-               },
-               headers: [
-                 {"x-shopify-access-token", shop.access_token}
-               ]
-             ) do
-          {:ok, %{status: 201, body: %{"webhook" => webhook}}} ->
-            {:ok, atomize_keys(webhook)}
+        mutation = """
+        mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
+          webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
+            webhookSubscription {
+              id
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+        """
+
+        variables = %{
+          topic: webhook_topic_to_graphql(topic),
+          webhookSubscription: %{
+            callbackUrl: Application.get_env(:shopifex, :webhook_uri),
+            format: "JSON"
+          }
+        }
+
+        case Shopifex.API.graphql(shop, mutation, variables) do
+          {:ok,
+           %{
+             "webhookSubscriptionCreate" => %{
+               "userErrors" => [],
+               "webhookSubscription" => %{"id" => id}
+             }
+           }} ->
+            {:ok, %{id: id, topic: topic}}
+
+          {:ok, %{"webhookSubscriptionCreate" => %{"userErrors" => errors}}} ->
+            {:error, errors}
 
           other ->
             other
         end
       end
 
-      defp atomize_keys(map) when is_map(map) do
-        Map.new(map, fn {k, v} -> {String.to_atom(k), v} end)
+      @doc """
+      Deletes a webhook subscription by its GraphQL ID via
+      `webhookSubscriptionDelete`.
+      """
+      def delete_webhook(shop, id) do
+        mutation = """
+        mutation webhookSubscriptionDelete($id: ID!) {
+          webhookSubscriptionDelete(id: $id) {
+            deletedWebhookSubscriptionId
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+        """
+
+        case Shopifex.API.graphql(shop, mutation, %{id: id}) do
+          {:ok,
+           %{
+             "webhookSubscriptionDelete" => %{
+               "userErrors" => [],
+               "deletedWebhookSubscriptionId" => deleted_id
+             }
+           }} ->
+            {:ok, deleted_id}
+
+          {:ok, %{"webhookSubscriptionDelete" => %{"userErrors" => errors}}} ->
+            {:error, errors}
+
+          other ->
+            other
+        end
       end
 
-      defp atomize_keys(other), do: other
-
-      def delete_webhook(shop, id) do
-        Req.delete(
-          "https://#{get_url(shop)}/admin/api/2026-01/webhooks/#{id}.json",
-          headers: [
-            {"x-shopify-access-token", shop.access_token},
-            {"content-type", "application/json"}
-          ]
-        )
+      # Shopify GraphQL webhook topics are uppercase enums with "/" and "."
+      # replaced by "_" (e.g. "orders/create" -> "ORDERS_CREATE",
+      # "customers/data_request" -> "CUSTOMERS_DATA_REQUEST").
+      defp webhook_topic_to_graphql(topic) do
+        topic |> String.replace(["/", "."], "_") |> String.upcase()
       end
 
       @doc """

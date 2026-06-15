@@ -65,7 +65,9 @@ defmodule ShopifexWeb.PaymentController do
       def show_plans(conn, params) do
         payment_guard = Application.fetch_env!(:shopifex, :payment_guard)
         path_prefix = Application.get_env(:shopifex, :path_prefix, "")
-        default_redirect_after = path_prefix <> "/?token=" <> Guardian.Plug.current_token(conn)
+        # Embedded apps re-authenticate via Shopify's per-load id_token, so the
+        # post-payment redirect just returns to the app root.
+        default_redirect_after = path_prefix <> "/"
 
         render_plans(
           conn,
@@ -81,12 +83,7 @@ defmodule ShopifexWeb.PaymentController do
           Application.get_env(:shopifex, :redirect_after_agent, Shopifex.RedirectAfterAgent)
 
         plan = payment_guard.get_plan(plan_id)
-
-        shop =
-          case conn.private do
-            %{shop: shop} -> shop
-            %{guardian_default_resource: shop} -> shop
-          end
+        shop = Shopifex.Plug.current_shop(conn)
 
         {:ok, charge} = create_charge(shop, plan)
 
@@ -98,102 +95,103 @@ defmodule ShopifexWeb.PaymentController do
       @impl ShopifexWeb.PaymentController
       def test_charge?(_shop, %{test: test?} = _plan), do: test?
 
-      # annual billing is only possible w/ the GraphQL API
-      defp create_charge(shop, plan = %{type: "recurring_application_charge", annual: true}) do
-        redirect_uri = Application.get_env(:shopifex, :payment_redirect_uri)
+      @doc """
+      Creates a Shopify charge for the given plan and returns
+      `{:ok, %{"id" => charge_id, "confirmation_url" => url}}`.
 
-        case Neuron.query(
-               """
-               mutation appSubscriptionCreate($name: String!, $return_url: URL!, $test: Boolean!, $price: Decimal!, $trial_days: Int!) {
-                 appSubscriptionCreate(name: $name, returnUrl: $return_url, test: $test, trialDays: $trial_days, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: $price, currencyCode: USD}, interval: ANNUAL}}}]) {
-                   appSubscription {
-                     id
-                   }
-                   confirmationUrl
-                   userErrors {
-                     field
-                     message
-                   }
-                 }
-               }
-               """,
-               %{
-                 name: plan.name,
-                 price: plan.price,
-                 test: test_charge?(shop, plan),
-                 trial_days: Map.get(plan, :trial_days, 0),
-                 return_url:
-                   "#{redirect_uri}?plan_id=#{plan.id}&shop=#{Shopifex.Shops.get_url(shop)}"
-               },
-               url: "https://#{Shopifex.Shops.get_url(shop)}/admin/api/2024-01/graphql.json",
-               headers: [
-                 "X-Shopify-Access-Token": shop.access_token,
-                 "Content-Type": "application/json"
-               ]
-             ) do
-          {:ok, %Neuron.Response{body: body}} ->
-            app_subscription_create = body["data"]["appSubscriptionCreate"]
+      Recurring plans (`type: "recurring_application_charge"`) use
+      `appSubscriptionCreate` (monthly by default, annual when `plan.annual` is
+      true). One-time plans (`type: "application_charge"`) use
+      `appPurchaseOneTimeCreate`. Both carry the `@idempotent` directive required
+      as of Admin API 2026-04, and run through `Shopifex.API.graphql/3` (which
+      keeps the access token fresh and uses the configured API version).
 
-            # id comes back in this format: "gid://shopify/AppSubscription/4019552312"
-            <<_::binary-size(30)>> <> id = app_subscription_create["appSubscription"]["id"]
-            confirmation_url = app_subscription_create["confirmationUrl"]
+      Overridable — define your own `create_charge/2` to customise pricing.
+      """
+      def create_charge(shop, %{type: "recurring_application_charge"} = plan) do
+        interval = if Map.get(plan, :annual, false), do: "ANNUAL", else: "EVERY_30_DAYS"
 
-            {:ok, %{"id" => id, "confirmation_url" => confirmation_url}}
-        end
+        mutation = """
+        mutation appSubscriptionCreate($name: String!, $returnUrl: URL!, $test: Boolean!, $price: Decimal!, $trialDays: Int!) {
+          appSubscriptionCreate(name: $name, returnUrl: $returnUrl, test: $test, trialDays: $trialDays, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: $price, currencyCode: USD}, interval: #{interval}}}}]) @idempotent(key: "#{Ecto.UUID.generate()}") {
+            appSubscription {
+              id
+            }
+            confirmationUrl
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+        """
+
+        variables = %{
+          name: plan.name,
+          price: to_string(plan.price),
+          test: test_charge?(shop, plan),
+          trialDays: Map.get(plan, :trial_days, 0),
+          returnUrl: charge_return_url(shop, plan)
+        }
+
+        shop
+        |> Shopifex.API.graphql(mutation, variables)
+        |> unwrap_charge("appSubscriptionCreate", "appSubscription")
       end
 
-      defp create_charge(shop, plan = %{type: "recurring_application_charge"}) do
-        redirect_uri = Application.get_env(:shopifex, :payment_redirect_uri)
-
-        body =
-          Jason.encode!(%{
-            recurring_application_charge: %{
-              name: plan.name,
-              price: plan.price,
-              test: test_charge?(shop, plan),
-              trial_days: Map.get(plan, :trial_days, 0),
-              return_url:
-                "#{redirect_uri}?plan_id=#{plan.id}&shop=#{Shopifex.Shops.get_url(shop)}"
+      def create_charge(shop, %{type: "application_charge"} = plan) do
+        mutation = """
+        mutation appPurchaseOneTimeCreate($name: String!, $returnUrl: URL!, $test: Boolean!, $price: MoneyInput!) {
+          appPurchaseOneTimeCreate(name: $name, returnUrl: $returnUrl, test: $test, price: $price) @idempotent(key: "#{Ecto.UUID.generate()}") {
+            appPurchaseOneTime {
+              id
             }
-          })
+            confirmationUrl
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+        """
 
-        case Req.post(
-               "https://#{Shopifex.Shops.get_url(shop)}/admin/api/2024-01/recurring_application_charges.json",
-               json: Jason.decode!(body),
-               headers: [{"x-shopify-access-token", shop.access_token}]
-             ) do
-          {:ok, %{status: 201, body: %{"recurring_application_charge" => charge}}} ->
-            {:ok, charge}
+        variables = %{
+          name: plan.name,
+          price: %{amount: to_string(plan.price), currencyCode: "USD"},
+          test: test_charge?(shop, plan),
+          returnUrl: charge_return_url(shop, plan)
+        }
 
-          {:ok, resp} ->
-            {:ok, resp.body["recurring_application_charge"]}
-        end
+        shop
+        |> Shopifex.API.graphql(mutation, variables)
+        |> unwrap_charge("appPurchaseOneTimeCreate", "appPurchaseOneTime")
       end
 
-      defp create_charge(shop, plan = %{type: "application_charge"}) do
+      defp charge_return_url(shop, plan) do
         redirect_uri = Application.get_env(:shopifex, :payment_redirect_uri)
+        "#{redirect_uri}?plan_id=#{plan.id}&shop=#{Shopifex.Shops.get_url(shop)}"
+      end
 
-        body =
-          Jason.encode!(%{
-            application_charge: %{
-              name: plan.name,
-              price: plan.price,
-              test: test_charge?(shop, plan),
-              return_url:
-                "#{redirect_uri}?plan_id=#{plan.id}&shop=#{Shopifex.Shops.get_url(shop)}"
-            }
-          })
+      defp unwrap_charge(result, mutation_field, charge_field) do
+        case result do
+          {:ok,
+           %{
+             ^mutation_field => %{
+               "userErrors" => [],
+               ^charge_field => %{"id" => gid},
+               "confirmationUrl" => confirmation_url
+             }
+           }} ->
+            # gid is "gid://shopify/AppSubscription/4019552312" — Shopify sends
+            # the trailing numeric id back as the `charge_id` return-url param.
+            {:ok,
+             %{"id" => List.last(String.split(gid, "/")), "confirmation_url" => confirmation_url}}
 
-        case Req.post(
-               "https://#{Shopifex.Shops.get_url(shop)}/admin/api/2024-01/application_charges.json",
-               json: Jason.decode!(body),
-               headers: [{"x-shopify-access-token", shop.access_token}]
-             ) do
-          {:ok, %{status: 201, body: %{"application_charge" => charge}}} ->
-            {:ok, charge}
+          {:ok, %{^mutation_field => %{"userErrors" => errors}}} ->
+            {:error, errors}
 
-          {:ok, resp} ->
-            {:ok, resp.body["application_charge"]}
+          error ->
+            error
         end
       end
 
@@ -247,7 +245,7 @@ defmodule ShopifexWeb.PaymentController do
         )
       end
 
-      defoverridable render_plans: 3, after_payment: 5, test_charge?: 2
+      defoverridable render_plans: 3, after_payment: 5, test_charge?: 2, create_charge: 2
     end
   end
 end

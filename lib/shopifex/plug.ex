@@ -39,18 +39,35 @@ defmodule Shopifex.Plug do
   def current_shopify_host(_), do: nil
 
   @doc """
-  Returns the token for the current session in a plug which has
-  passed through a `:shopify_*` pipeline.
+  Returns the Shopify App Bridge session token (`id_token`) for the current
+  request, read from the `token` query param or the `Authorization: Bearer`
+  header.
+
+  Embedded apps no longer mint their own session token — Shopify supplies a
+  fresh short-lived `id_token` on every embedded page load. Verify it with
+  `Shopifex.SessionToken`.
 
   ## Example
       iex> session_token(conn)
       "header.payload.signature"
   """
-  @spec session_token(conn :: Plug.Conn.t()) :: Guardian.Token.token() | nil
-  def session_token(%Plug.Conn{} = conn), do: Guardian.Plug.current_token(conn)
+  @spec session_token(conn :: Plug.Conn.t()) :: String.t() | nil
+  def session_token(%Plug.Conn{params: %{"token" => token}}) when is_binary(token), do: token
+
+  def session_token(%Plug.Conn{} = conn) do
+    case Plug.Conn.get_req_header(conn, "authorization") do
+      ["Bearer " <> token | _] -> token
+      _ -> nil
+    end
+  end
 
   @doc """
-  Build the Shopifex session. Used in various `:shopifex_*` pipelines.
+  Build the Shopifex session. Used in various `:shopify_*` pipelines.
+
+  Stores the current shop and Shopify host in `conn.private.shopifex`, where
+  `current_shop/1` and `current_shopify_host/1` read them, and applies the
+  request locale. No app-issued token is minted — embedded auth is carried by
+  Shopify's per-request `id_token` (see `Shopifex.SessionToken`).
   """
   @spec build_session(
           conn :: Plug.Conn.t(),
@@ -61,19 +78,12 @@ defmodule Shopifex.Plug do
   def build_session(conn, shop, host, locale \\ "en") do
     Gettext.put_locale(locale || "en")
 
-    {:ok, token, claims} =
-      Shopifex.Guardian.encode_and_sign(shop, %{"loc" => locale, "host" => host})
-
     shopifex_private_data = %{
       shop: shop,
       shopify_host: host
     }
 
-    conn
-    |> Guardian.Plug.put_current_resource(shop)
-    |> Guardian.Plug.put_current_claims(claims)
-    |> Guardian.Plug.put_current_token(token)
-    |> Plug.Conn.put_private(:shopifex, shopifex_private_data)
+    Plug.Conn.put_private(conn, :shopifex, shopifex_private_data)
   end
 
   @doc """

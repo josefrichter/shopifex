@@ -14,19 +14,16 @@ defmodule Shopifex.Plug.ShopifySessionTest do
   end
 
   describe "authorized requests" do
-    setup do
-      conn =
-        build_conn(:get, "?locale=fr")
-        |> Plug.Conn.fetch_query_params()
-
-      {:ok, conn: conn}
-    end
-
     setup [:shop_in_session]
 
-    test "locale is placed in session with locale parameter", %{conn: conn} do
-      Shopifex.Plug.ShopifySession.call(conn, [])
+    test "locale is placed in session with locale parameter", %{shop: shop} do
+      conn =
+        build_conn(:get, "?locale=fr")
+        |> Plug.Conn.put_req_header("authorization", "Bearer #{valid_session_token(shop.url)}")
+        |> Plug.Conn.fetch_query_params()
+        |> Shopifex.Plug.ShopifySession.call([])
 
+      assert %ShopifexDummy.Shop{url: "shopifex.myshopify.com"} = Shopifex.Plug.current_shop(conn)
       assert Gettext.get_locale() == "fr"
     end
   end

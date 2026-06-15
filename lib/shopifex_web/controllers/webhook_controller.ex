@@ -50,6 +50,27 @@ defmodule ShopifexWeb.WebhookController do
 
       def action(conn, _),
         do: handle_topic(conn, Shopifex.Plug.current_shop(conn), conn.assigns[:shopify_topic])
+
+      # Default handlers for Shopify's mandatory compliance (GDPR) webhooks.
+      # These satisfy app-review requirements out of the box: `shop/redact`
+      # deletes the shop record, the customer topics acknowledge with 200.
+      #
+      # `handle_topic/3` is `defoverridable`, so apps can replace these. If you
+      # define your own `handle_topic/3` clauses you replace ALL of them — add a
+      # catch-all that calls `super(conn, shop, topic)` if you want to keep these
+      # compliance defaults.
+      def handle_topic(conn, _shop, "customers/data_request"),
+        do: Plug.Conn.send_resp(conn, 200, "")
+
+      def handle_topic(conn, _shop, "customers/redact"),
+        do: Plug.Conn.send_resp(conn, 200, "")
+
+      def handle_topic(conn, shop, "shop/redact") do
+        if shop, do: Shopifex.Shops.delete_shop(shop)
+        Plug.Conn.send_resp(conn, 200, "")
+      end
+
+      defoverridable handle_topic: 3
     end
   end
 end
