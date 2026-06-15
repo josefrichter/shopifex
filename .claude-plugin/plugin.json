@@ -1,0 +1,9 @@
+{
+  "name": "shopifex",
+  "description": "Build and extend Shopify embedded apps with the Shopifex Elixir/Phoenix library — managed-install auth, Admin GraphQL, webhooks, billing, LiveView, testing, and the gotchas.",
+  "version": "0.1.0",
+  "author": { "name": "Josef Richter" },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/josefrichter/shopifex",
+  "keywords": ["shopify", "elixir", "phoenix", "liveview", "shopifex", "embedded-app"]
+}

@@ -14,17 +14,18 @@ defmodule Shopifex.MixProject do
       # Hex
       description: "Phoenix boilerplate for Shopify Embedded App SDK",
       package: [
-        maintainers: ["Eric Froese"],
+        maintainers: ["Josef Richter"],
         licenses: ["Apache-2.0"],
         links: %{
-          "GitHub" => "https://github.com/ericdude4/shopifex"
+          "GitHub" => "https://github.com/josefrichter/shopifex",
+          "Upstream (original)" => "https://github.com/ericdude4/shopifex"
         },
         files: ~w(lib LICENSE mix.exs README.md CHANGELOG.md docs/parity-matrix.md )
       ],
       # Docs
       name: "Shopifex",
-      source_url: "https://github.com/ericdude4/shopifex",
-      homepage_url: "https://github.com/ericdude4/shopifex",
+      source_url: "https://github.com/josefrichter/shopifex",
+      homepage_url: "https://github.com/josefrichter/shopifex",
       docs: [
         # The main page in the docs
         main: "Shopifex",

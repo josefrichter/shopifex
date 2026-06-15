@@ -71,6 +71,31 @@ We also checked all active forks of upstream shopifex. None had implemented mana
 
 ---
 
+## Learning resources
+
+- **[Getting Started tutorial](docs/getting-started.html)** — a beginner-friendly,
+  GitHub-Pages-ready walkthrough that builds a live "Bestsellers" LiveView dashboard
+  (auth, Admin GraphQL, webhooks + PubSub, billing, App Bridge/Polaris).
+- **[Parity matrix](docs/parity-matrix.md)** — how Shopifex compares to Shopify's
+  official JS and Ruby libraries.
+
+## Claude Code plugin
+
+This repo doubles as a [Claude Code](https://docs.claude.com/en/docs/claude-code)
+plugin marketplace. The bundled `shopifex` skill teaches Claude the library's
+conventions and gotchas so it scaffolds Shopifex features correctly (managed-install
+auth, `Shopifex.API.graphql/3`, webhooks, billing, testing, App Bridge/Polaris UI).
+
+```
+/plugin marketplace add josefrichter/shopifex
+/plugin install shopifex@shopifex
+```
+
+The skill lives in `skills/shopifex/` (`SKILL.md` + `reference.md`) and auto-activates
+when you work in a Phoenix app that uses Shopifex.
+
+---
+
 ## Original Installation
 
 The package can be installed
