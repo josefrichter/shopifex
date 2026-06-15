@@ -7,7 +7,14 @@ defmodule Shopifex.Plug.ShopifyApiAuth do
   `getSessionToken`/`idToken`) as an `Authorization: Bearer <token>` header.
   This plug verifies it with `Shopifex.SessionToken`, resolves the shop, and
   builds the Shopifex session so controllers can call
-  `Shopifex.Plug.current_shop/1`. On failure it responds `401` and halts.
+  `Shopifex.Plug.current_shop/1`.
+
+  On failure it responds `401`, halts, and sets the
+  `x-shopify-retry-invalid-session-request: 1` response header. Embedded session
+  tokens live only ~60 seconds, so an in-flight or back-forward-cache request
+  routinely arrives with an expired token; App Bridge's `authenticatedFetch`
+  watches for that header and transparently retries the request with a freshly
+  minted `id_token` instead of surfacing the 401 to the user.
 
   Used by the `:shopify_api` / `:shopifex_api` pipelines. Replaces the
   Guardian-based pipeline used in Shopifex v2.
@@ -26,6 +33,7 @@ defmodule Shopifex.Plug.ShopifyApiAuth do
     else
       _ ->
         conn
+        |> put_resp_header("x-shopify-retry-invalid-session-request", "1")
         |> put_status(:unauthorized)
         |> Phoenix.Controller.json(%{error: "unauthorized", status: 401})
         |> halt()

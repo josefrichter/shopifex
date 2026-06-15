@@ -197,7 +197,7 @@ defmodule Shopifex.Plug.ManagedInstallTest do
 
   # --- existing stale shop ---------------------------------------------------
 
-  test "existing stale shop: re-exchanges to refresh the lifecycle fields, without re-running install hooks" do
+  test "existing stale shop: re-exchanges, refreshes lifecycle fields, reconciles webhooks, but skips install hooks" do
     shop =
       Shops.create_shop(%{
         url: @shop,
@@ -216,8 +216,9 @@ defmodule Shopifex.Plug.ManagedInstallTest do
       ManagedInstall.call(conn_with(%{"id_token" => token(), "shop" => @shop, "host" => "h"}), [])
 
     assert_received :token_exchanged
-    # A refresh of an existing shop must not re-subscribe webhooks or re-run install hooks.
-    refute_received :webhook_created
+    # A re-exchange reconciles webhooks (idempotent self-healing)...
+    assert_received :webhook_created
+    # ...but must NOT re-run install hooks.
     refute_received {:after_install, _}
 
     refreshed = Shops.get_shop_by_url(@shop)

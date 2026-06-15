@@ -36,10 +36,7 @@ defmodule Shopifex.Plug.ValidateHmac do
   end
 
   defp validate_signature(conn) do
-    expected_hmac = Shopifex.Plug.build_hmac(conn)
-    received_hmac = Shopifex.Plug.get_hmac(conn)
-
-    if is_binary(received_hmac) and Plug.Crypto.secure_compare(expected_hmac, received_hmac) do
+    if Shopifex.Plug.hmac_matches?(conn, Shopifex.Plug.get_hmac(conn)) do
       :ok
     else
       {:error, "signature mismatch"}

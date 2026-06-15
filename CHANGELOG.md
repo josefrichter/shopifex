@@ -73,6 +73,13 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
   `replacement_behavior`, `discount`, `currency_code`, and `line_items`
   (multiple items / usage pricing) from plan data.
 - `docs/parity-matrix.md` — behavior parity matrix vs Shopify JS and Ruby.
+- `Shopifex.Test` — public test helpers (ships in the package) for forging the
+  tokens/HMACs Shopifex verifies: `sign_session_token/2`, `put_shopify_session/3`,
+  `sign_webhook/2`, `put_webhook_hmac/3`, `sign_query_hmac/2`. Lets consuming apps
+  test controllers/LiveViews behind the `:shopify_*` pipelines without Shopify.
+- `Shopifex.Plug.ShopifyApiAuth` now sets `x-shopify-retry-invalid-session-request: 1`
+  on its `401`, so App Bridge's `authenticatedFetch` transparently retries with a
+  fresh `id_token` (embedded tokens live ~60s) instead of surfacing the error.
 - `jose` is now an explicit dependency.
 
 ### Security
@@ -85,6 +92,10 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
 - Query / app-proxy HMAC parameters are signed in explicit alphabetical order.
 - Query / app-proxy requests with a `timestamp` are rejected outside a 90-second
   tolerance (`config :shopifex, :hmac_timestamp_tolerance_seconds`).
+- **Secret rotation.** Set `config :shopifex, :old_secret` to have webhook /
+  app-proxy / session HMAC verification and session-token (`id_token`)
+  verification accept the previous secret as well, so rotating the app secret
+  doesn't drop in-flight webhooks or sessions.
 
 ### Changed
 
@@ -97,6 +108,19 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
   app config. Opt back into the legacy redirect with
   `plug Shopifex.Plug.EnsureScopes, on_missing_scopes: :redirect` (or
   `config :shopifex, :ensure_scopes_on_missing, :redirect`).
+- **Webhook subscriptions self-heal.** `Shopifex.Plug.ManagedInstall` now
+  reconciles webhooks (idempotent `configure_webhooks/1`) on existing-shop token
+  re-exchanges, not just first install — recovering from a registration that
+  failed at install or topics added to `:webhook_topics` later. It runs at the
+  token-exchange cadence (≤ the 50-minute staleness window), never on the hot
+  per-load path.
+- **Built-in pages use the Shopify-hosted App Bridge + Polaris web components.**
+  The auth / payment / redirect pages now load App Bridge and Polaris from
+  `cdn.shopify.com` with a `<meta name="shopify-api-key">` tag, and are rendered
+  with Polaris web components (`s-page`, `s-section`, …) — no React. The vendored
+  `@shopify/app-bridge@3` + Polaris 4/7 bundle (`assets/`, `priv/static/`) was
+  removed, so apps **no longer need** the `Plug.Static at: "/shopifex-assets"`
+  endpoint entry. The `mix shopifex.install` task no longer prints it.
 - Tests use `Req.Test` stubs; `exvcr` and its cassettes were removed.
 
 ## [2.0.1] - 2021-08-25

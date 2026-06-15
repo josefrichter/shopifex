@@ -341,15 +341,10 @@ config :my_app,
   plan_schema: MyApp.Shops.Plan,
   payment_redirect_uri: "https://myapp.ngrok.io/payment/complete"
 ```
-Serve the Shopifex assets for the plans selection page. Add the following to `endpoint.ex`:
-```elixir
-# Serve at "/shopifex-assets" the static files from shopifex.
-plug Plug.Static,
-  at: "/shopifex-assets",
-  from: :shopifex,
-  gzip: false,
-  only: ~w(css fonts images js favicon.ico robots.txt)
-```
+> The plan-selection page renders with Polaris web components loaded from
+> Shopify's CDN, so there are no Shopifex static assets to serve (the old
+> `Plug.Static, at: "/shopifex-assets"` step is no longer needed as of 3.0).
+
 Create the payment guard module:
 ```elixir
 defmodule MyApp.Shops.PaymentGuard do
@@ -424,22 +419,25 @@ defmodule MyAppWeb.AuthController do
   end
 end
 ```
-Now, [integrate Shopify session tokens into the Axios instance of your SPA.](https://shopify.dev/tutorials/use-session-tokens-with-axios)
-Then from your SPA:
-```javascript
-import createApp from '@shopify/app-bridge';
-// Import your Shopify session_token axios instance based on the Shopify session token axios instructions
-import instance from './axios-instance';
+Load [App Bridge](https://shopify.dev/docs/api/app-bridge-library) from Shopify's
+CDN with your API key in a meta tag. App Bridge auto-initializes and exposes a
+global `shopify` object, and automatically attaches a fresh session token as the
+`Authorization: Bearer` header on same-origin `fetch` calls — which is exactly
+what the `:shopify_api` pipeline (`Shopifex.Plug.ShopifyApiAuth`) verifies.
 
-const urlParams = new URLSearchParams(window.location.search);
-const shopOrigin = urlParams.get('shop');
-
-window.app = createApp({
-  apiKey: "MY_SHOPIFY_API_KEY",
-  shopOrigin,
-});
-
-// Use your axios instance to call the /api/initialize endpoint
-const sessionData = await instance.get('/api/initialize');
-// Now you will have access to the current shop and Bob's-yer-uncle!
+```html
+<meta name="shopify-api-key" content="MY_SHOPIFY_API_KEY" />
+<script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
 ```
+```javascript
+// App Bridge attaches the Bearer token automatically — no axios interceptor needed.
+const res = await fetch('/api/initialize');
+const sessionData = await res.json();
+
+// If you need the raw token (e.g. for a WebSocket), ask App Bridge for one:
+const token = await shopify.idToken();
+```
+
+> The old `import createApp from '@shopify/app-bridge'` / `createApp({ apiKey, shopOrigin })`
+> flow (and the axios session-token tutorial) is the deprecated App Bridge v2/v3 API
+> and no longer applies — the CDN App Bridge above is the current path.

@@ -5,9 +5,10 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{app_name()}</title>
-    <link rel="stylesheet" href="https://unpkg.com/@shopify/polaris@4.22.0/styles.min.css" />
-    <link rel="stylesheet" href={path_prefix() <> "/shopifex-assets/css/app.css"} />
-    <script defer type="text/javascript" src={path_prefix() <> "/shopifex-assets/js/app.js"}>
+    <meta name="shopify-api-key" content={api_key()} />
+    <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js">
+    </script>
+    <script src="https://cdn.shopify.com/shopifycloud/polaris.js">
     </script>
   </head>
   <body>

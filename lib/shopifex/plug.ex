@@ -103,37 +103,59 @@ defmodule Shopifex.Plug do
     Plug.Conn.put_private(conn, :shopifex, shopifex_private_data)
   end
 
+  @doc """
+  Returns the HMAC the request should carry, computed with the app's current
+  secret. Used for verification and for (re)issuing signed values.
+  """
   @spec build_hmac(conn :: Plug.Conn.t()) :: String.t()
-  def build_hmac(%Plug.Conn{query_params: %{"hmac" => _}} = conn) do
+  def build_hmac(conn), do: build_hmac(conn, primary_secret())
+
+  @doc """
+  Like `build_hmac/1`, but computes the HMAC with an explicit `secret`. Used by
+  `hmac_matches?/2` to accept either the current or a rotated `:old_secret`.
+  """
+  @spec build_hmac(conn :: Plug.Conn.t(), secret :: binary()) :: String.t()
+  def build_hmac(%Plug.Conn{query_params: %{"hmac" => _}} = conn, secret) do
     # hmac param takes precedence and is present in App load requests.
     conn.query_params
     |> Map.delete("hmac")
-    |> query_string_hmac("&")
+    |> query_string_hmac("&", secret)
   end
 
-  def build_hmac(%Plug.Conn{query_params: %{"signature" => _}} = conn) do
+  def build_hmac(%Plug.Conn{query_params: %{"signature" => _}} = conn, secret) do
     # signature param is present in Shopify App proxy requests https://shopify.dev/apps/online-store/app-proxies
     conn.query_params
     |> Map.delete("signature")
-    |> query_string_hmac()
+    |> query_string_hmac("", secret)
   end
 
-  def build_hmac(%Plug.Conn{method: "GET"} = conn) do
+  def build_hmac(%Plug.Conn{method: "GET"} = conn, secret) do
     conn.query_params
-    |> query_string_hmac()
+    |> query_string_hmac("", secret)
   end
 
-  def build_hmac(%Plug.Conn{method: "POST"} = conn) do
+  def build_hmac(%Plug.Conn{method: "POST"} = conn, secret) do
     # Webhook body HMACs are Base64 and MUST be compared case-sensitively — do
     # not downcase. Shopify (JS/Ruby) compares the raw Base64 digest.
-    :crypto.mac(
-      :hmac,
-      :sha256,
-      Application.fetch_env!(:shopifex, :secret),
-      conn.assigns[:raw_body]
-    )
+    :crypto.mac(:hmac, :sha256, secret, conn.assigns[:raw_body])
     |> Base.encode64()
   end
+
+  @doc """
+  Constant-time check that `received` matches the request's expected HMAC under
+  the app's current secret &mdash; or, when `config :shopifex, :old_secret` is
+  set, the previous one. Trying both lets you rotate the app secret without
+  dropping in-flight webhooks / signed requests still carrying the old signature.
+  Returns `false` for a non-binary `received` (e.g. a missing header).
+  """
+  @spec hmac_matches?(conn :: Plug.Conn.t(), received :: term()) :: boolean()
+  def hmac_matches?(%Plug.Conn{} = conn, received) when is_binary(received) do
+    Enum.any?(secrets(), fn secret ->
+      Plug.Crypto.secure_compare(build_hmac(conn, secret), received)
+    end)
+  end
+
+  def hmac_matches?(_conn, _received), do: false
 
   @spec get_hmac(conn :: Plug.Conn.t()) :: String.t() | nil
   def get_hmac(%Plug.Conn{params: %{"hmac" => hmac}}), do: String.downcase(hmac)
@@ -150,7 +172,10 @@ defmodule Shopifex.Plug do
     end
   end
 
-  defp query_string_hmac(query_params, joiner \\ "") do
+  @doc false
+  # Public only so `Shopifex.Test.sign_query_hmac/2` signs exactly as we verify
+  # (incl. the `ids` bulk-action quirk). Not part of the public API.
+  def query_string_hmac(query_params, joiner, secret) do
     query_string =
       query_params
       # Shopify signs query/app-proxy params in alphabetical order; sort
@@ -171,12 +196,18 @@ defmodule Shopifex.Plug do
           "#{key}=#{value}"
       end)
 
-    :crypto.mac(
-      :hmac,
-      :sha256,
-      Application.fetch_env!(:shopifex, :secret),
-      query_string
-    )
+    :crypto.mac(:hmac, :sha256, secret, query_string)
     |> Base.encode16(case: :lower)
+  end
+
+  defp primary_secret, do: Application.fetch_env!(:shopifex, :secret)
+
+  # The current secret first, then the rotated-out `:old_secret` if configured,
+  # so HMAC verification accepts signatures from before a secret rotation.
+  defp secrets do
+    case Application.get_env(:shopifex, :old_secret) do
+      old when is_binary(old) and old != "" -> [primary_secret(), old]
+      _ -> [primary_secret()]
+    end
   end
 end

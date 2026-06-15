@@ -74,4 +74,29 @@ defmodule Shopifex.SessionTokenTest do
     assert {:error, :invalid_token} = SessionToken.verify(nil)
     assert {:error, :invalid_token} = SessionToken.verify(123, @shop)
   end
+
+  describe "secret rotation (:old_secret)" do
+    @old_secret "shpss_previous_app_secret"
+
+    setup do
+      on_exit(fn -> Application.delete_env(:shopifex, :old_secret) end)
+      :ok
+    end
+
+    test "accepts a token signed with the old secret only when :old_secret is configured" do
+      jwk = JOSE.JWK.from_oct(@old_secret)
+      {_, token} = JOSE.JWT.sign(jwk, %{"alg" => "HS256"}, valid_claims()) |> JOSE.JWS.compact()
+
+      assert {:error, :invalid_signature} = SessionToken.verify(token, @shop)
+
+      Application.put_env(:shopifex, :old_secret, @old_secret)
+      assert {:ok, claims} = SessionToken.verify(token, @shop)
+      assert claims["dest"] == "https://#{@shop}"
+    end
+
+    test "the current secret still verifies while :old_secret is configured" do
+      Application.put_env(:shopifex, :old_secret, @old_secret)
+      assert {:ok, _claims} = SessionToken.verify(sign(valid_claims()), @shop)
+    end
+  end
 end

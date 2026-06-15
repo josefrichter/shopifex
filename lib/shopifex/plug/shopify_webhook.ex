@@ -12,11 +12,9 @@ defmodule Shopifex.Plug.ShopifyWebhook do
   end
 
   def call(conn, _) do
-    expected_hmac = Shopifex.Plug.build_hmac(conn)
-    received_hmac = Shopifex.Plug.get_hmac(conn)
-
     # Webhook HMACs are Base64; compare in constant time, case-sensitively.
-    if is_binary(received_hmac) and Plug.Crypto.secure_compare(expected_hmac, received_hmac) do
+    # `hmac_matches?/2` also accepts a rotated-out `:old_secret` when configured.
+    if Shopifex.Plug.hmac_matches?(conn, Shopifex.Plug.get_hmac(conn)) do
       shop =
         conn
         |> get_shop_domain()

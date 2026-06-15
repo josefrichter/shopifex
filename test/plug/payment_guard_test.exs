@@ -22,7 +22,25 @@ defmodule Shopifex.Plug.PaymentGuardTest do
     conn_follow_redirect = get(Phoenix.ConnTest.build_conn(), redirect_location)
 
     assert Shopifex.Plug.session_token(conn_follow_redirect)
-    assert html_response(conn_follow_redirect, 200) =~ "WrappedShowPlans"
+    assert html_response(conn_follow_redirect, 200) =~ "Payment options"
+  end
+
+  test "show-plans escapes a malicious redirect_after (no inline-script breakout)", %{conn: conn} do
+    payload = "</script><script>window.__xss=1</script>"
+
+    conn =
+      get(
+        conn,
+        "/payment/show-plans?guard_identifier=block&redirect_after=" <>
+          URI.encode_www_form(payload)
+      )
+
+    body = html_response(conn, 200)
+    # The raw </script><script> breakout must NOT appear...
+    refute body =~ "<script>window.__xss"
+    refute body =~ "</script><script>"
+    # ...because `<` is emitted as the HTML-safe JSON escape <.
+    assert body =~ "\\u003Cscript"
   end
 
   test "payment guard grants access pay-walled function and places guard payment in session", %{

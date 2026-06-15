@@ -138,6 +138,44 @@ defmodule Shopifex.Plug.HmacTest do
     end
   end
 
+  describe "secret rotation (:old_secret)" do
+    @old_secret "shpss_the_previous_secret"
+
+    setup do
+      on_exit(fn -> Application.delete_env(:shopifex, :old_secret) end)
+      :ok
+    end
+
+    defp webhook_signed_with(secret) do
+      raw = ~s({"id": 7, "topic": "orders/create"})
+      hmac = :crypto.mac(:hmac, :sha256, secret, raw) |> Base.encode64()
+
+      %{Plug.Test.conn(:post, "/webhook") | params: %{"myshopify_domain" => "rot.myshopify.com"}}
+      |> Plug.Conn.assign(:raw_body, raw)
+      |> Plug.Conn.put_req_header("x-shopify-hmac-sha256", hmac)
+    end
+
+    test "a webhook signed with the old secret is accepted only once :old_secret is set" do
+      Shops.create_shop(%{url: "rot.myshopify.com", scope: "orders", access_token: "t"})
+
+      # Without :old_secret configured, the old signature is rejected.
+      assert ShopifyWebhook.call(webhook_signed_with(@old_secret), []).halted
+
+      # With :old_secret configured, it is accepted (and the session is built).
+      Application.put_env(:shopifex, :old_secret, @old_secret)
+      conn = ShopifyWebhook.call(webhook_signed_with(@old_secret), [])
+      refute conn.halted
+      assert Shopifex.Plug.current_shop(conn).url == "rot.myshopify.com"
+    end
+
+    test "the current secret still verifies while :old_secret is configured" do
+      Shops.create_shop(%{url: "rot.myshopify.com", scope: "orders", access_token: "t"})
+      Application.put_env(:shopifex, :old_secret, @old_secret)
+
+      refute ShopifyWebhook.call(webhook_signed_with(@secret), []).halted
+    end
+  end
+
   describe "HMAC failures do not leak the computed secret into logs" do
     setup do
       # The failure logs are emitted at :info; the test config gates at :warn,

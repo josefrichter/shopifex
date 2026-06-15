@@ -205,10 +205,17 @@ defmodule Shopifex.Plug.ManagedInstall do
     shop
   end
 
-  # Token refresh of an already-installed shop: only update the token-lifecycle
-  # fields. No callbacks, no webhook re-subscription.
+  # Token refresh of an already-installed shop: update the token-lifecycle
+  # fields, and reconcile webhooks so subscriptions self-heal. Install hooks do
+  # NOT re-run. `configure_webhooks/1` is idempotent — it only creates missing
+  # subscriptions — so this recovers from a webhook registration that failed at
+  # install time, or topics added to `:webhook_topics` after install. It runs at
+  # the token-exchange cadence (≤ the 50-minute staleness window), never on the
+  # hot per-load path that builds the session from a fresh shop directly.
   defp persist_shop(_new? = false, shop, attrs) do
-    Shopifex.Shops.update_shop(shop, attrs)
+    shop = Shopifex.Shops.update_shop(shop, attrs)
+    Shopifex.Shops.configure_webhooks(shop)
+    shop
   end
 
   defp build_session_from_shop(conn, shop) do

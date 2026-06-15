@@ -1,19 +1,45 @@
-<div id="root"></div>
+<s-page heading="Payment options">
+  <s-section>
+    <s-paragraph>Select a plan to continue.</s-paragraph>
+  </s-section>
+
+  <s-section :for={plan <- plans_for_guard(@conn, @guard)} heading={plan.name}>
+    <s-paragraph>{price_label(plan)}</s-paragraph>
+    <ul>
+      <li :for={feature <- List.wrap(plan.features)}>{feature}</li>
+    </ul>
+    <button type="button" data-plan-id={plan.id} disabled={current_plan?(@conn, plan)}>
+      {if current_plan?(@conn, plan), do: "Current plan", else: "Select"}
+    </button>
+  </s-section>
+</s-page>
 
 <script>
-  document.addEventListener("DOMContentLoaded", e => {
-      window.WrappedShowPlans(
-          {
-              guard: "<%= @guard %>",
-              plans: <%= raw(available_plans(Shopifex.Plug.current_shop(@conn), @guard)) %>,
-              redirect_after: "<%= @redirect_after %>",
-              shop_url: "<%= shop_url(@conn) %>",
-              plan_select_route: "<%= path_prefix() <> "/payment/select-plan" %>",
-              shopify_api_key: "<%= api_key() %>",
-              shopify_host: "<%= Shopifex.Plug.current_shopify_host(@conn) %>",
-              session_token: "<%= Shopifex.Plug.session_token(@conn) %>",
-              current_grants: "<%= current_grants(@conn) %>"
+  (function () {
+    var route = <%= raw(Jason.encode!(path_prefix() <> "/payment/select-plan", escape: :html_safe)) %>;
+    var redirectAfter = <%= raw(Jason.encode!(@redirect_after, escape: :html_safe)) %>;
+
+    document.addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-plan-id]");
+      if (!btn || btn.disabled) { return; }
+      btn.disabled = true;
+
+      // App Bridge attaches the session token to this fetch automatically.
+      fetch(route, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plan_id: btn.getAttribute("data-plan-id"),
+          redirect_after: redirectAfter
+        })
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (charge) {
+          if (charge && charge.confirmation_url) {
+            // Break out of the iframe to Shopify's charge-approval screen.
+            open(charge.confirmation_url, "_top");
           }
-      )
-  })
+        });
+    });
+  })();
 </script>

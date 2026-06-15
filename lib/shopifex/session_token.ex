@@ -49,18 +49,34 @@ defmodule Shopifex.SessionToken do
 
     with true <- is_binary(secret) and secret != "",
          true <- is_binary(api_key) and api_key != "",
-         {true, %JOSE.JWT{fields: claims}, _jws} <-
-           JOSE.JWT.verify_strict(JOSE.JWK.from_oct(secret), ["HS256"], token),
+         {:ok, claims} <- verify_signature(token, secret),
          :ok <- validate_claims(claims, shop_url, api_key) do
       {:ok, claims}
     else
       false -> {:error, :missing_shopify_credentials}
-      {false, _, _} -> {:error, :invalid_signature}
       {:error, reason} -> {:error, reason}
       _ -> {:error, :invalid_token}
     end
   rescue
     _ -> {:error, :invalid_token}
+  end
+
+  # Strict HS256 verify with the current secret, falling back to a rotated-out
+  # `:old_secret` (when configured) so a secret rotation doesn't reject
+  # in-flight session tokens still signed with the previous secret.
+  defp verify_signature(token, secret) do
+    secrets =
+      case Application.get_env(:shopifex, :old_secret) do
+        old when is_binary(old) and old != "" -> [secret, old]
+        _ -> [secret]
+      end
+
+    Enum.reduce_while(secrets, {:error, :invalid_signature}, fn candidate, acc ->
+      case JOSE.JWT.verify_strict(JOSE.JWK.from_oct(candidate), ["HS256"], token) do
+        {true, %JOSE.JWT{fields: claims}, _jws} -> {:halt, {:ok, claims}}
+        _ -> {:cont, acc}
+      end
+    end)
   end
 
   defp validate_claims(claims, shop_url, api_key) do

@@ -35,7 +35,7 @@ defmodule Shopifex.Plug.EnsureScopesTest do
       )
 
     assert conn.halted
-    assert html_response(conn, 200) =~ "WrappedRedirect"
+    assert html_response(conn, 200) =~ "Redirecting"
 
     assert conn.assigns.redirect_location =~
              "https://shopifex.myshopify.com/admin/oauth/authorize?client_id=thisisafakeapikey"
