@@ -16,12 +16,13 @@ defmodule Shopifex.Plug.ManagedInstall do
      (50 min, comfortably inside the 1h TTL), it re-exchanges to refresh.
   4. Otherwise it builds the session from the stored shop directly.
 
-  It also handles the cookie-less `auth_token` redirect bridge (a signed
-  `Phoenix.Token`) used to carry auth across an auth-controller redirect when
-  third-party cookies are blocked in the Shopify admin iframe.
+  New installs are persisted through the configurable
+  `Shopifex.ManagedInstall.Callbacks` hooks (`insert_shop/1`, `after_install/1`),
+  so apps can customise shop creation and post-install side effects without
+  re-implementing token exchange. Webhooks are configured on first install only.
 
-  If no recognised token is present, this plug is a no-op — the request falls
-  through to the traditional OAuth flow.
+  If no recognised `id_token` is present, this plug is a no-op — the request
+  falls through to the legacy OAuth flow (`Shopifex.Plug.ShopifySession`).
 
   ## Usage
 
@@ -81,21 +82,6 @@ defmodule Shopifex.Plug.ManagedInstall do
         )
 
         conn
-    end
-  end
-
-  # Redirect bridge from the auth controller — `auth_token` is a signed
-  # `Phoenix.Token` that survives the redirect without cookies (third-party
-  # cookie blocking in the iframe).
-  def call(%{params: %{"auth_token" => auth_token, "shop" => shop_url}} = conn, _opts) do
-    with {:ok, shop_id} <- Phoenix.Token.verify(conn, "shop_auth", auth_token, max_age: 60),
-         shop when not is_nil(shop) <- Shopifex.Shops.get_shop_by_url(shop_url),
-         true <- to_string(Map.get(shop, :id)) == to_string(shop_id) do
-      host = conn.params["host"]
-      locale = conn.params["locale"] || "en"
-      Shopifex.Plug.build_session(conn, shop, host, locale)
-    else
-      _ -> conn
     end
   end
 
@@ -169,12 +155,7 @@ defmodule Shopifex.Plug.ManagedInstall do
       {:ok, %{status: 200, body: response_body}} when is_map(response_body) ->
         Logger.info("[Shopifex.ManagedInstall] Token exchange successful for #{shop_url}")
 
-        shop = upsert_shop(shop_url, build_shop_attrs(shop_url, response_body))
-
-        # Webhook subscriptions are configured on first install only — refreshes
-        # shouldn't re-subscribe.
-        if new?, do: Shopifex.Shops.configure_webhooks(shop)
-
+        shop = persist_shop(new?, fallback, build_shop_attrs(shop_url, response_body))
         build_session_from_shop(conn, shop)
 
       {:ok, %{status: status, body: body}} ->
@@ -208,14 +189,26 @@ defmodule Shopifex.Plug.ManagedInstall do
       refresh_token: body["refresh_token"],
       refresh_token_expires_at: expires_at(now, body["refresh_token_expires_in"])
     }
-    |> Map.put(scope_field, body["scope"])
+    # Mirror the OAuth path (Shopifex.Auth): never persist a nil scope, so
+    # downstream scope checks stay well-defined under the nullable-scope schema.
+    |> Map.put(scope_field, body["scope"] || "")
   end
 
-  defp upsert_shop(shop_url, attrs) do
-    case Shopifex.Shops.get_shop_by_url(shop_url) do
-      nil -> Shopifex.Shops.create_shop(attrs)
-      shop -> Shopifex.Shops.update_shop(shop, attrs)
-    end
+  # First install: persist through the configurable managed-install callbacks so
+  # apps can customise creation, then configure webhooks (first install only) and
+  # run app-specific post-install side effects.
+  defp persist_shop(_new? = true, _fallback, attrs) do
+    callbacks = Shopifex.ManagedInstall.Callbacks.module()
+    shop = callbacks.insert_shop(attrs)
+    Shopifex.Shops.configure_webhooks(shop)
+    callbacks.after_install(shop)
+    shop
+  end
+
+  # Token refresh of an already-installed shop: only update the token-lifecycle
+  # fields. No callbacks, no webhook re-subscription.
+  defp persist_shop(_new? = false, shop, attrs) do
+    Shopifex.Shops.update_shop(shop, attrs)
   end
 
   defp build_session_from_shop(conn, shop) do

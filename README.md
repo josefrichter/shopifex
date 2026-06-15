@@ -95,17 +95,33 @@ Follow the output `config.ex` and `router.ex` instructions from the install scri
 mix ecto.migrate
 ```
 #### Update Shopify app details
-Replace tunnel-url with your own where applicable.
+With **managed installation** (the default for new embedded apps), Shopify loads
+your app with a fresh `id_token` on every page load and the `:managed_install`
+pipeline exchanges it for an offline access token — no OAuth redirect URLs are
+required. Declare your access scopes in `shopify.app.toml` (`[access_scopes]`).
+
+Replace the tunnel URL with your own where applicable.
 - Set "App URL" to `https://my-app.ngrok.io/auth`
-- Add `https://my-app.ngrok.io/auth/install` & `https://my-app.ngrok.io/auth/update` to your app's "Allowed redirection URL(s)"
-- Add your Shopify app's API key and API secret key to `config :shopifex, api_key: "your-api-key", secret: "your-api-secret"`
+- Add your Shopify app's API key and API secret key to
+  `config :shopifex, api_key: "your-api-key", secret: "your-api-secret"`
+
+> **Legacy OAuth (compatibility only):** if you still rely on the authorization-code
+> OAuth flow, also add `https://my-app.ngrok.io/auth/install` and
+> `https://my-app.ngrok.io/auth/update` to your app's "Allowed redirection URL(s)"
+> and set `redirect_uri` / `reinstall_uri` in config (see below). New apps should
+> not need these.
 
 ## Manual Installation
-Create the shop schema where the installation data will be stored:
+Create the shop schema where the installation data will be stored. Include the
+token-lifecycle columns so Shopify's **expiring** offline tokens (required for
+public apps from April 1, 2026) can be refreshed in the background:
 ```
-mix phx.gen.schema Shop shops url:string access_token:string scope:string
+mix phx.gen.schema Shop shops url:string access_token:string scope:string \
+  token_expires_at:utc_datetime refresh_token:string refresh_token_expires_at:utc_datetime
 mix ecto.migrate
 ```
+The four token columns are nullable — legacy/non-expiring installs round-trip with
+`nil` expiry values. (`mix shopifex.install` generates this schema for you.)
 
 Add the `:shopifex` config settings to your `config.ex`. More config details [here](https://hexdocs.pm/shopifex)
 
@@ -115,15 +131,20 @@ config :shopifex,
   shop_schema: MyApp.Shop,
   web_module: MyAppWeb,
   repo: MyApp.Repo,
-  redirect_uri: "https://myapp.ngrok.io/auth/install",
-  reinstall_uri: "https://myapp.ngrok.io/auth/update",
   webhook_uri: "https://myapp.ngrok.io/webhook",
   scopes: "read_inventory,write_inventory,read_products,write_products,read_orders",
   api_key: "shopifyapikey123",
   secret: "shopifyapisecret456",
+  api_version: "2026-04", # Admin GraphQL API version used by Shopifex.API
   webhook_topics: ["app/uninstalled"], # These are automatically subscribed on a store upon install
-  allowed_drift: 10_000 # session token exp/nbf tolerance in ms (defaults to 10s)
   shops_context_client: Shopifex.ShopsContextClient # Optional. Overridable context module which Shopifex uses to fetch and manage common app state
+
+# Optional managed-install hooks (customise shop creation / post-install side effects):
+#   managed_install_callbacks: MyApp.ManagedInstallCallbacks
+
+# Legacy OAuth fallback only — not needed for managed installation:
+#   redirect_uri: "https://myapp.ngrok.io/auth/install",
+#   reinstall_uri: "https://myapp.ngrok.io/auth/update",
 ```
 
 Update your `endpoint.ex` to include the custom body parser. This is necessary for HMAC validation to work.
@@ -144,29 +165,26 @@ ShopifexWeb.Routes.pipelines()
 ```
 Now the following pipelines are accessible:
 
-- `:shopify_session` -> Validates request (HMAC header/param or token param) and makes session information available via `Shopifex.Plug` API. Also removes iFrame blocking headers so app can render in Shopify admin.
-- `:shopify_webhook` -> Validates Shopify webhook requests HMAC and makes session information available via `Shopifex.Plug` API.
+- `:managed_install` -> Runs `Shopifex.Plug.ManagedInstall`: verifies Shopify's `id_token`, exchanges it for an expiring offline access token, and builds the session. Already included in `auth_routes/1` before `:shopify_session`.
+- `:shopify_session` -> Verifies the App Bridge `id_token` (or the legacy HMAC), and makes session information available via `Shopifex.Plug` API. No-ops when `:managed_install` already loaded the shop. Also removes iFrame blocking headers so app can render in Shopify admin.
+- `:shopify_webhook` -> Validates Shopify webhook request HMAC (Base64, constant-time) and makes session information available via `Shopifex.Plug` API.
 - `:shopify_admin_link` -> Validates Shopify admin link & bulk action link requests and makes session information available via `Shopifex.Plug` API.
-- `:shopify_api` -> Ensures that a valid Shopify session token or Shopifex token are present in `Authorization` header. Useful for async requests between your SPA front end and Shopifex backend.
-- `:shopifex_browser` -> Same as your normal `:browser` pipeline, except it calls `Shopifex.Plug.LoadInIframe`.  Deprecated; does not work with Phoenix 1.6 generated apps.
+- `:shopify_api` -> Ensures that a valid Shopify session token is present in the `Authorization` header. Useful for async requests between your SPA front end and Shopifex backend.
+- `:shopifex_browser` -> Same as your normal `:browser` pipeline, except it calls `Shopifex.Plug.LoadInIframe`.
 
 Now add this basic example of these plugs in action in `router.ex`. These endpoints need to be added to your Shopify app whitelist
 
 ### Routing
 ```elixir
-# Include all auth (when Shopify requests to render your app in an iframe), installation and update routes 
+# Include all auth (managed installation, plus legacy OAuth install/update) routes.
+# The generated `/auth` route runs the `:managed_install` pipeline before
+# `:shopify_session`, so token exchange happens automatically on app load.
 ShopifexWeb.Routes.auth_routes(MyAppWeb.AuthController)
-
-# Add the LoadInIframe plug to your existing :browser pipeline
-pipeline :browser do
-  # ... Other plugs
-  plug Shopifex.Plug.LoadInIframe
-end
 
 # Endpoints accessible within the Shopify admin panel iFrame.
 # Don't include this scope block if you are creating a SPA.
 scope "/", MyAppWeb do
-  pipe_through [:browser, :shopify_session]
+  pipe_through [:shopifex_browser, :shopify_session]
 
   get "/", PageController, :index
 end
@@ -245,22 +263,24 @@ defmodule MyAppWeb.WebhookController do
 end
 ```
 ## Maintaining session between page loads for server-rendered applications
-As browsers continue to restrict cookies, cookies become more unreliable as a method for maintaining a session within an iFrame. To address this, Shopify recommends passing a JWT session token back and forth between requests.
+With managed installation you no longer pass tokens around yourself. Shopify's
+App Bridge appends a fresh `id_token` to every embedded page load (and sends it as
+an `Authorization: Bearer` token on authenticated fetches). The `:managed_install`
+and `:shopify_session` pipelines verify that token and load the shop, so a plain
+link to another `:shopify_session` route just works:
 
-Shopifex makes a token accessible with `Shopifex.Plug.session_token(conn)` in any request which passes through a `:shopify_*` router pipeline.
-
-Ensure there is a `token` parameter sent along in any requests which you would like to maintain session between.
-
-EEx template link:
-```elixir
-<%= link "home", to: Routes.page_path(@conn, :index, %{token: Shopifex.Plug.session_token(conn)}) %>
+```heex
+<.link navigate={~p"/"}>home</.link>
 ```
-EEx template form:
-```elixir
-<%= form_for :foo, Routes.foo_path(MyApp.Endpoint, :new, %{token: Shopifex.Plug.session_token(@conn)}), fn f -> %>
-  <%= submit "Submit" %>
-<% end %>
-```
+
+`Shopifex.Plug.current_shop(conn)` is available in any request that passes through
+a `:shopify_*` pipeline. For LiveView, use the `shopifex_live_session` macro below.
+
+> **Legacy (v2) token-in-URL pattern.** Older apps threaded
+> `Shopifex.Plug.session_token(conn)` through a `token` query parameter on every
+> link/form. This still works (`session_token/1` reads `id_token`, `token`, and the
+> `Bearer` header), but it is no longer necessary for managed-install apps and is
+> kept only for backward compatibility.
 
 ## Using LiveView in your embedded app
 There are two special considerations to using LiveView in your embedded app.
@@ -289,13 +309,20 @@ end
 
 ## Update app permissions
 
-You can also update the app permissions after installation. To do so, first you have to add `your-redirect-url.com/auth/update` to Shopify's whitelist.
+With managed installation, **change your access scopes in `shopify.app.toml`**
+(`[access_scopes]`) and deploy your app config — Shopify re-grants the scopes the
+next time the merchant loads the app, and `:managed_install` re-exchanges the
+token. `Shopifex.Plug.EnsureScopes` raises an actionable error if a shop is missing
+a required scope, so you find config drift fast.
 
-To add e.g. the `read_customers` scope, you can do so by redirecting them to the following example url:
-
-```
-https://{shop-name}.myshopify.com/admin/oauth/request_grant?client_id=API_KEY&redirect_uri={YOUR_REINSTALL_URL}/auth/update&scope={YOUR_SCOPES},read_customers
-```
+> **Legacy OAuth scope update (compatibility only).** If you opt into the OAuth
+> fallback (`plug Shopifex.Plug.EnsureScopes, on_missing_scopes: :redirect`), add
+> `your-redirect-url.com/auth/update` to Shopify's whitelist and redirect the
+> merchant to re-authorize:
+>
+> ```
+> https://{shop-name}.myshopify.com/admin/oauth/request_grant?client_id=API_KEY&redirect_uri={YOUR_REINSTALL_URL}/auth/update&scope={YOUR_SCOPES},read_customers
+> ```
 
 ## Add payment guards to routes
 This system allows you to use the `Shopifex.Plug.PaymentGuard` plug. If the merchant does not have an active grant associated with the named guard, it will redirect them to a plan selection page, allow them to pay, and handle the payment callback all automatically. I am working on the admin panel where you can register Plan objects which grant `premium_plan` (for example) - but for now these need to be entered manually into the database.
@@ -389,8 +416,10 @@ defmodule MyAppWeb.AuthController do
   use ShopifexWeb.AuthController
   
   def initialize(conn, _params) do
-    shop = Guardian.Plug.current_resource(conn)
-    
+    # Guardian is no longer used — the `:shopify_api` pipeline verifies the
+    # App Bridge session token and loads the shop.
+    shop = Shopifex.Plug.current_shop(conn)
+
     render(conn, "initialize.json", %{shop: shop})
   end
 end

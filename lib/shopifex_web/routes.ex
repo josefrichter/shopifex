@@ -17,10 +17,10 @@ defmodule ShopifexWeb.Routes do
   @doc """
   Injects the following Shopify router pipelines into your Shopifex application's router.
 
-  - `:shopify_session`: Validates request (HMAC header/param or token param) and makes session information available via Shopifex.Plug API. Also removes iFrame blocking headers so app can render in Shopify admin.
+  - `:shopify_session`: Verifies the App Bridge session token (`id_token`), or the legacy install HMAC, and makes session information available via Shopifex.Plug API. No-ops when an earlier `:managed_install` already loaded the shop. Also removes iFrame blocking headers so app can render in Shopify admin.
   - `:shopify_webhook`: Validates Shopify webhook requests HMAC and makes session information available via Shopifex.Plug API.
   - `:shopify_admin_link`: Validates Shopify admin link & bulk action link requests and makes session information available via Shopifex.Plug API. Also removes iFrame blocking headers so app can render in Shopify admin.
-  - `:shopify_api`: Ensures that a valid Shopify session token or Shopifex token are present in Authorization header. Useful for async requests between your SPA front end and Shopifex backend.
+  - `:shopify_api`: Ensures that a valid Shopify App Bridge session token (`id_token`) is present in the Authorization header. Useful for async requests between your SPA front end and Shopifex backend.
   - `:shopifex_browser`: Same as your normal :browser pipeline, except it calls Shopifex.Plug.LoadInIframe.
   - `:shopify_embedded`: Sets Content-Security-Policy headers to restrict app loading to within the Shopify admin. Read more: https://shopify.dev/apps/store/security/iframe-protection#embedded-apps
   """
@@ -90,7 +90,11 @@ defmodule ShopifexWeb.Routes do
   defmacro auth_routes(controller \\ ShopifexWeb.AuthController) do
     quote do
       scope "/auth" do
-        pipe_through([:shopifex_browser, :shopify_session])
+        # Managed installation (the default for new embedded apps): `:managed_install`
+        # runs token exchange from Shopify's per-request `id_token` and builds the
+        # session; `:shopify_session` then no-ops when the shop is already loaded, or
+        # handles the legacy OAuth/HMAC fallback when no `id_token` is present.
+        pipe_through([:shopifex_browser, :managed_install, :shopify_session])
         get("/", unquote(controller), :auth)
       end
 

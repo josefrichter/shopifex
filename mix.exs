@@ -19,7 +19,7 @@ defmodule Shopifex.MixProject do
         links: %{
           "GitHub" => "https://github.com/ericdude4/shopifex"
         },
-        files: ~w(lib priv LICENSE mix.exs README.md CHANGELOG.md )
+        files: ~w(lib priv LICENSE mix.exs README.md CHANGELOG.md docs/parity-matrix.md )
       ],
       # Docs
       name: "Shopifex",
@@ -29,7 +29,7 @@ defmodule Shopifex.MixProject do
         # The main page in the docs
         main: "Shopifex",
         logo: "guides/images/s.png",
-        extras: ["README.md", "CHANGELOG.md"],
+        extras: ["README.md", "CHANGELOG.md", "docs/parity-matrix.md"],
         filter_prefix: "Shopifex"
       ]
     ]

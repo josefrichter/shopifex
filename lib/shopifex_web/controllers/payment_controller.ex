@@ -102,18 +102,34 @@ defmodule ShopifexWeb.PaymentController do
       Recurring plans (`type: "recurring_application_charge"`) use
       `appSubscriptionCreate` (monthly by default, annual when `plan.annual` is
       true). One-time plans (`type: "application_charge"`) use
-      `appPurchaseOneTimeCreate`. Both carry the `@idempotent` directive required
-      as of Admin API 2026-04, and run through `Shopifex.API.graphql/3` (which
-      keeps the access token fresh and uses the configured API version).
+      `appPurchaseOneTimeCreate`. Both run through `Shopifex.API.graphql/3`
+      (which keeps the access token fresh and uses the configured API version)
+      and match Shopify's documented GraphQL shape — line items are passed as a
+      `$lineItems` variable rather than interpolated into the query, and no
+      `@idempotent` directive is sent (Shopify does not document one for these
+      mutations).
+
+      ### Optional recurring features
+
+      The default builds a single recurring line item from `plan.price` /
+      `plan.annual`. Supply extra plan data to opt into Shopify features:
+
+        * `:replacement_behavior` — an `AppSubscriptionReplacementBehavior`
+          (e.g. `:apply_immediately`, `"STANDARD"`).
+        * `:currency_code` — defaults to `"USD"`.
+        * `:discount` — an `AppSubscriptionDiscountInput` map merged into the
+          default line item's pricing details.
+        * `:line_items` — a fully-formed list of `AppSubscriptionLineItemInput`
+          maps. When given, it overrides the default line item entirely, so you
+          can pass multiple line items, usage (`appUsagePricingDetails`) pricing,
+          or custom discounts.
 
       Overridable — define your own `create_charge/2` to customise pricing.
       """
       def create_charge(shop, %{type: "recurring_application_charge"} = plan) do
-        interval = if Map.get(plan, :annual, false), do: "ANNUAL", else: "EVERY_30_DAYS"
-
         mutation = """
-        mutation appSubscriptionCreate($name: String!, $returnUrl: URL!, $test: Boolean!, $price: Decimal!, $trialDays: Int!) {
-          appSubscriptionCreate(name: $name, returnUrl: $returnUrl, test: $test, trialDays: $trialDays, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: $price, currencyCode: USD}, interval: #{interval}}}}]) @idempotent(key: "#{Ecto.UUID.generate()}") {
+        mutation appSubscriptionCreate($name: String!, $returnUrl: URL!, $test: Boolean!, $trialDays: Int!, $lineItems: [AppSubscriptionLineItemInput!]!, $replacementBehavior: AppSubscriptionReplacementBehavior) {
+          appSubscriptionCreate(name: $name, returnUrl: $returnUrl, test: $test, trialDays: $trialDays, lineItems: $lineItems, replacementBehavior: $replacementBehavior) {
             appSubscription {
               id
             }
@@ -128,10 +144,12 @@ defmodule ShopifexWeb.PaymentController do
 
         variables = %{
           name: plan.name,
-          price: to_string(plan.price),
           test: test_charge?(shop, plan),
           trialDays: Map.get(plan, :trial_days, 0),
-          returnUrl: charge_return_url(shop, plan)
+          returnUrl: charge_return_url(shop, plan),
+          lineItems: subscription_line_items(plan),
+          replacementBehavior:
+            normalize_replacement_behavior(Map.get(plan, :replacement_behavior))
         }
 
         shop
@@ -142,7 +160,7 @@ defmodule ShopifexWeb.PaymentController do
       def create_charge(shop, %{type: "application_charge"} = plan) do
         mutation = """
         mutation appPurchaseOneTimeCreate($name: String!, $returnUrl: URL!, $test: Boolean!, $price: MoneyInput!) {
-          appPurchaseOneTimeCreate(name: $name, returnUrl: $returnUrl, test: $test, price: $price) @idempotent(key: "#{Ecto.UUID.generate()}") {
+          appPurchaseOneTimeCreate(name: $name, returnUrl: $returnUrl, test: $test, price: $price) {
             appPurchaseOneTime {
               id
             }
@@ -157,7 +175,7 @@ defmodule ShopifexWeb.PaymentController do
 
         variables = %{
           name: plan.name,
-          price: %{amount: to_string(plan.price), currencyCode: "USD"},
+          price: %{amount: to_string(plan.price), currencyCode: charge_currency_code(plan)},
           test: test_charge?(shop, plan),
           returnUrl: charge_return_url(shop, plan)
         }
@@ -166,6 +184,37 @@ defmodule ShopifexWeb.PaymentController do
         |> Shopifex.API.graphql(mutation, variables)
         |> unwrap_charge("appPurchaseOneTimeCreate", "appPurchaseOneTime")
       end
+
+      # A caller-supplied `:line_items` list wins outright (multiple line items,
+      # usage pricing, custom discounts). Otherwise build the single recurring
+      # line item from price/interval, optionally with a discount.
+      defp subscription_line_items(%{line_items: line_items}) when is_list(line_items),
+        do: line_items
+
+      defp subscription_line_items(plan) do
+        interval = if Map.get(plan, :annual, false), do: "ANNUAL", else: "EVERY_30_DAYS"
+
+        pricing =
+          %{
+            price: %{amount: to_string(plan.price), currencyCode: charge_currency_code(plan)},
+            interval: interval
+          }
+          |> maybe_put(:discount, Map.get(plan, :discount))
+
+        [%{plan: %{appRecurringPricingDetails: pricing}}]
+      end
+
+      defp charge_currency_code(plan), do: Map.get(plan, :currency_code, "USD")
+
+      defp normalize_replacement_behavior(nil), do: nil
+
+      defp normalize_replacement_behavior(value) when is_atom(value),
+        do: value |> Atom.to_string() |> String.upcase()
+
+      defp normalize_replacement_behavior(value) when is_binary(value), do: String.upcase(value)
+
+      defp maybe_put(map, _key, nil), do: map
+      defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
       defp charge_return_url(shop, plan) do
         redirect_uri = Application.get_env(:shopifex, :payment_redirect_uri)

@@ -15,7 +15,8 @@ defmodule Shopifex.Plug.ShopifyWebhook do
     expected_hmac = Shopifex.Plug.build_hmac(conn)
     received_hmac = Shopifex.Plug.get_hmac(conn)
 
-    if expected_hmac == received_hmac do
+    # Webhook HMACs are Base64; compare in constant time, case-sensitively.
+    if is_binary(received_hmac) and Plug.Crypto.secure_compare(expected_hmac, received_hmac) do
       shop =
         conn
         |> get_shop_domain()
@@ -32,7 +33,7 @@ defmodule Shopifex.Plug.ShopifyWebhook do
         |> halt()
       end
     else
-      Logger.info("HMAC doesn't match " <> expected_hmac)
+      Logger.info("Rejecting webhook with invalid HMAC")
 
       conn
       |> send_resp(401, "invalid hmac signature")

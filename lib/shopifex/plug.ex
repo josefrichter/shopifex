@@ -40,18 +40,21 @@ defmodule Shopifex.Plug do
 
   @doc """
   Returns the Shopify App Bridge session token (`id_token`) for the current
-  request, read from the `token` query param or the `Authorization: Bearer`
-  header.
+  request, read from the `id_token` or `token` query param, or the
+  `Authorization: Bearer` header.
 
   Embedded apps no longer mint their own session token — Shopify supplies a
-  fresh short-lived `id_token` on every embedded page load. Verify it with
-  `Shopifex.SessionToken`.
+  fresh short-lived `id_token` on every embedded page load (App Bridge appends
+  it to the URL as `id_token`, and sends it as a `Bearer` token on authenticated
+  fetches). Verify it with `Shopifex.SessionToken`.
 
   ## Example
       iex> session_token(conn)
       "header.payload.signature"
   """
   @spec session_token(conn :: Plug.Conn.t()) :: String.t() | nil
+  def session_token(%Plug.Conn{params: %{"id_token" => token}}) when is_binary(token), do: token
+
   def session_token(%Plug.Conn{params: %{"token" => token}}) when is_binary(token), do: token
 
   def session_token(%Plug.Conn{} = conn) do
@@ -121,6 +124,8 @@ defmodule Shopifex.Plug do
   end
 
   def build_hmac(%Plug.Conn{method: "POST"} = conn) do
+    # Webhook body HMACs are Base64 and MUST be compared case-sensitively — do
+    # not downcase. Shopify (JS/Ruby) compares the raw Base64 digest.
     :crypto.mac(
       :hmac,
       :sha256,
@@ -128,7 +133,6 @@ defmodule Shopifex.Plug do
       conn.assigns[:raw_body]
     )
     |> Base.encode64()
-    |> String.downcase()
   end
 
   @spec get_hmac(conn :: Plug.Conn.t()) :: String.t() | nil
@@ -137,8 +141,10 @@ defmodule Shopifex.Plug do
   def get_hmac(%Plug.Conn{params: %{"signature" => signature}}), do: String.downcase(signature)
 
   def get_hmac(%Plug.Conn{} = conn) do
+    # The `x-shopify-hmac-sha256` webhook header is Base64 — return it verbatim
+    # for a case-sensitive `secure_compare/2` against the Base64 body digest.
     with [hmac_header] <- Plug.Conn.get_req_header(conn, "x-shopify-hmac-sha256") do
-      String.downcase(hmac_header)
+      hmac_header
     else
       _ -> nil
     end
@@ -147,6 +153,9 @@ defmodule Shopifex.Plug do
   defp query_string_hmac(query_params, joiner \\ "") do
     query_string =
       query_params
+      # Shopify signs query/app-proxy params in alphabetical order; sort
+      # explicitly rather than relying on map iteration order.
+      |> Enum.sort()
       |> Enum.map_join(joiner, fn
         {"ids", value} ->
           # This absolutely ridiculous solution: https://community.shopify.com/c/Shopify-Apps/Hmac-Verification-for-Bulk-Actions/m-p/590611#M18504

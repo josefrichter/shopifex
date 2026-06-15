@@ -45,8 +45,8 @@ defmodule Shopifex do
 
   - `Shopifex.Plug.ManagedInstall` — verifies the `id_token`, exchanges it for
     an **expiring** offline access token, persists the full token lifecycle,
-    and re-exchanges on a staleness window. Also bridges the cookie-less
-    auth-controller redirect via a signed `Phoenix.Token`.
+    and re-exchanges on a staleness window. New shops are persisted through the
+    configurable `Shopifex.ManagedInstall.Callbacks` hooks.
   - `Shopifex.Plug.ShopifySession` — verifies the session token on each
     embedded request and loads the shop.
   - `Shopifex.Plug.ShopifyApiAuth` — backs the `:shopify_api` pipeline for

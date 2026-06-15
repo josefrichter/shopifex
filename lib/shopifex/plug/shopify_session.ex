@@ -9,12 +9,20 @@ defmodule Shopifex.Plug.ShopifySession do
   end
 
   def call(conn, _) do
-    case authenticate_session_token(conn) do
-      {:ok, shop} ->
-        Shopifex.Plug.build_session(conn, shop, get_host(conn), get_locale(conn))
+    # When `Shopifex.Plug.ManagedInstall` runs earlier in the pipeline it has
+    # already verified the `id_token`, (re)exchanged the offline access token and
+    # placed the shop in the session. Re-authenticating here would be redundant
+    # and would fail for the managed-install request shape, so yield to it.
+    if Shopifex.Plug.current_shop(conn) do
+      conn
+    else
+      case authenticate_session_token(conn) do
+        {:ok, shop} ->
+          Shopifex.Plug.build_session(conn, shop, get_host(conn), get_locale(conn))
 
-      :error ->
-        initiate_new_session(conn)
+        :error ->
+          initiate_new_session(conn)
+      end
     end
   end
 
@@ -41,7 +49,7 @@ defmodule Shopifex.Plug.ShopifySession do
       conn
       |> do_new_session()
     else
-      Logger.info("Invalid HMAC, expected #{expected_hmac}")
+      Logger.info("Rejecting session request with invalid HMAC")
       respond_invalid(conn)
     end
   end

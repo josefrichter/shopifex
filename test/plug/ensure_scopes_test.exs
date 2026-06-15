@@ -19,10 +19,20 @@ defmodule Shopifex.Plug.EnsureScopesTest do
     refute conn.halted
   end
 
-  test "renders redirect page with location to Shopify OAuth update flow", %{
+  test "raises an actionable error by default when scopes are missing", %{conn: conn} do
+    assert_raise Shopifex.RuntimeError, ~r/missing required scopes/, fn ->
+      Shopifex.Plug.EnsureScopes.call(conn, required_scopes: "read_orders")
+    end
+  end
+
+  test "renders redirect page with location to Shopify OAuth update flow when opted in", %{
     conn: conn
   } do
-    conn = Shopifex.Plug.EnsureScopes.call(conn, required_scopes: "read_orders")
+    conn =
+      Shopifex.Plug.EnsureScopes.call(conn,
+        required_scopes: "read_orders",
+        on_missing_scopes: :redirect
+      )
 
     assert conn.halted
     assert html_response(conn, 200) =~ "WrappedRedirect"

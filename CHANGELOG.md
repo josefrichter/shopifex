@@ -50,19 +50,53 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
 - Token-lifecycle columns on the shop schema (`token_expires_at`,
   `refresh_token`, `refresh_token_expires_at`; `scope` now nullable), all
   additive and nullable so legacy / non-expiring installs round-trip.
-- `Shopifex.Plug.ManagedInstall`: verifies `id_token`, requests **expiring**
-  tokens (`expiring=1`), persists the full token lifecycle, re-exchanges on a
-  50-minute staleness window, and bridges the cookie-less auth redirect via a
-  signed `Phoenix.Token`.
+- **Managed installation is the default embedded auth flow.** `auth_routes/1`
+  now pipes `/auth` through `[:shopifex_browser, :managed_install,
+  :shopify_session]`, so generated apps run token exchange out of the box.
+  `Shopifex.Plug.ManagedInstall` verifies `id_token`, requests **expiring**
+  tokens (`expiring=1`), persists the full token lifecycle, and re-exchanges on
+  a 50-minute staleness window.
+- `Shopifex.ManagedInstall.Callbacks` — configurable `insert_shop/1` and
+  `after_install/1` hooks for the managed-install path
+  (`config :shopifex, managed_install_callbacks: MyApp.Callbacks`). Token
+  refreshes of an existing shop skip the callbacks. The legacy
+  `AuthController.after_install/3` / `insert_shop/1` callbacks apply only to the
+  OAuth controller flow.
+- `Shopifex.Plug.session_token/1` now also reads the `id_token` query parameter
+  (in addition to `token` and `Authorization: Bearer`), and
+  `Shopifex.Plug.ShopifySession` yields to a shop already loaded by
+  `ManagedInstall` instead of re-authenticating.
 - Default GDPR webhook handlers in `ShopifexWeb.WebhookController`
   (`customers/data_request`, `customers/redact`, `shop/redact`), overridable.
-- `appPurchaseOneTimeCreate` support for one-time charges; `@idempotent` on all
-  billing mutations (required as of 2026-04). `create_charge/2` is now public
-  and overridable.
+- `appPurchaseOneTimeCreate` support for one-time charges. `create_charge/2` is
+  now public and overridable, and the recurring mutation accepts optional
+  `replacement_behavior`, `discount`, `currency_code`, and `line_items`
+  (multiple items / usage pricing) from plan data.
+- `docs/parity-matrix.md` — behavior parity matrix vs Shopify JS and Ruby.
 - `jose` is now an explicit dependency.
+
+### Security
+
+- HMAC comparisons use constant-time `Plug.Crypto.secure_compare/2` everywhere
+  (`ValidateHmac`, `ShopifyWebhook`, `ShopifySession`), and computed HMAC values
+  are no longer logged on failure.
+- Webhook Base64 HMACs are compared case-sensitively (no longer lowercased),
+  matching Shopify JS/Ruby.
+- Query / app-proxy HMAC parameters are signed in explicit alphabetical order.
+- Query / app-proxy requests with a `timestamp` are rejected outside a 90-second
+  tolerance (`config :shopifex, :hmac_timestamp_tolerance_seconds`).
 
 ### Changed
 
+- **Billing mutations no longer send `@idempotent`.** Shopify does not document
+  the directive for `appSubscriptionCreate` / `appPurchaseOneTimeCreate`, and the
+  official JS/Ruby libraries omit it. Recurring line items are passed as a
+  `$lineItems` GraphQL variable rather than interpolated into the query.
+- **`Shopifex.Plug.EnsureScopes` no longer redirects to OAuth by default.** On a
+  scope mismatch it now raises an actionable error pointing at managed-install
+  app config. Opt back into the legacy redirect with
+  `plug Shopifex.Plug.EnsureScopes, on_missing_scopes: :redirect` (or
+  `config :shopifex, :ensure_scopes_on_missing, :redirect`).
 - Tests use `Req.Test` stubs; `exvcr` and its cassettes were removed.
 
 ## [2.0.1] - 2021-08-25

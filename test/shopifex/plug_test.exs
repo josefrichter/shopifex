@@ -62,8 +62,8 @@ defmodule Shopifex.PlugTest do
                })
     end
 
-    test "POST request build hash with assigned raw_body" do
-      assert "yjgox9rf6sy058r98v06zcrhbw7tlcryrf12e7rmkou=" =
+    test "POST request build hash with assigned raw_body (Base64, case-preserved)" do
+      assert "yJgOX9Rf6sY058r98V06ZCrhbw7TlcryRf12e7RmKoU=" =
                %Plug.Conn{method: "POST"}
                |> Plug.Conn.assign(:raw_body, "{\"foo\": \"bar\"}")
                |> Shopifex.Plug.build_hmac()
@@ -109,12 +109,12 @@ defmodule Shopifex.PlugTest do
                })
     end
 
-    test "POST request gets hash from signature header" do
-      assert "yjgox9rf6sy058r98v06zcrhbw7tlcryrf12e7rmkou=" =
+    test "POST request gets Base64 hash from header verbatim (case-preserved)" do
+      assert "yJgOX9Rf6sY058r98V06ZCrhbw7TlcryRf12e7RmKoU=" =
                %Plug.Conn{method: "POST"}
                |> Plug.Conn.put_req_header(
                  "x-shopify-hmac-sha256",
-                 "yjgox9rf6sy058r98v06zcrhbw7tlcryrf12e7rmkou="
+                 "yJgOX9Rf6sY058r98V06ZCrhbw7TlcryRf12e7RmKoU="
                )
                |> Shopifex.Plug.get_hmac()
     end

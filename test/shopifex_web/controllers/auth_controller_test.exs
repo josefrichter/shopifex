@@ -48,4 +48,65 @@ defmodule ShopifexWeb.AuthControllerTest do
     assert body =~ "Install"
     assert body =~ "Invalid shop URL"
   end
+
+  describe "managed installation through the generated /auth route" do
+    setup do
+      parent = self()
+
+      # Stub the whole round trip: RFC 8693 token exchange (scope matches the
+      # configured `:scopes` so the :shopify_session pipeline's EnsureScopes
+      # passes) plus GraphQL webhook configuration.
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        if String.ends_with?(conn.request_path, "/admin/oauth/access_token") do
+          Req.Test.json(conn, %{
+            "access_token" => "integration_token",
+            "scope" => "orders",
+            "expires_in" => 3600,
+            "refresh_token" => "integration_refresh",
+            "refresh_token_expires_in" => 7_776_000
+          })
+        else
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+          if Jason.decode!(body)["query"] =~ "webhookSubscriptionCreate" do
+            send(parent, :webhook_created)
+
+            Req.Test.json(conn, %{
+              "data" => %{
+                "webhookSubscriptionCreate" => %{
+                  "webhookSubscription" => %{"id" => "gid://shopify/WebhookSubscription/1"},
+                  "userErrors" => []
+                }
+              }
+            })
+          else
+            Req.Test.json(conn, %{"data" => %{"webhookSubscriptions" => %{"edges" => []}}})
+          end
+        end
+      end)
+
+      :ok
+    end
+
+    test "GET /auth?id_token=...&shop=... installs the shop and lands in the app", %{conn: conn} do
+      shop_url = "integration.myshopify.com"
+      id_token = valid_session_token(shop_url)
+
+      query =
+        URI.encode_query(%{"id_token" => id_token, "shop" => shop_url, "host" => "aG9zdA=="})
+
+      conn = get(conn, Routes.auth_path(@endpoint, :auth) <> "?#{query}")
+
+      # auth/2 redirects to the app root once the session is established.
+      assert redirected_to(conn) == "/"
+
+      # Webhooks are configured on first install, end-to-end through the pipeline.
+      assert_received :webhook_created
+
+      shop = Shopifex.Shops.get_shop_by_url(shop_url)
+      assert shop.access_token == "integration_token"
+      assert shop.scope == "orders"
+      assert shop.refresh_token == "integration_refresh"
+    end
+  end
 end
