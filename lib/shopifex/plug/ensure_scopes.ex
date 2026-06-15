@@ -64,8 +64,8 @@ defmodule Shopifex.Plug.EnsureScopes do
               "https://#{Shopifex.Shops.get_url(shop)}/admin/oauth/authorize?client_id=#{Application.fetch_env!(:shopifex, :api_key)}&scope=#{all_scopes_to_request}&redirect_uri=#{Application.fetch_env!(:shopifex, :reinstall_uri)}"
 
             conn
-            |> put_view(ShopifexWeb.PageView)
-            |> put_layout({ShopifexWeb.LayoutView, "app.html"})
+            |> put_view(ShopifexWeb.PageHTML)
+            |> put_layout({ShopifexWeb.Layouts, :app})
             |> render("redirect.html", redirect_location: reinstall_url, message: message)
             |> halt()
         end

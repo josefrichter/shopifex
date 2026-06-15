@@ -227,9 +227,9 @@ defmodule ShopifexWeb.PaymentController do
       @impl ShopifexWeb.PaymentController
       def render_plans(conn, guard_identifier, redirect_after) do
         conn
-        |> put_view(ShopifexWeb.PaymentView)
-        |> put_layout({ShopifexWeb.LayoutView, "app.html"})
-        |> render("show-plans.html",
+        |> put_view(ShopifexWeb.PaymentHTML)
+        |> put_layout({ShopifexWeb.Layouts, :app})
+        |> render("show_plans.html",
           guard: guard_identifier,
           redirect_after: redirect_after
         )

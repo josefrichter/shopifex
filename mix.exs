@@ -51,6 +51,7 @@ defmodule Shopifex.MixProject do
   defp deps do
     [
       {:phoenix, ">= 1.6.0"},
+      {:phoenix_live_view, "~> 1.0"},
       {:phoenix_html_helpers, "~> 1.0"},
       {:phoenix_ecto, "~> 4.6"},
       {:phoenix_view, "~> 2.0"},

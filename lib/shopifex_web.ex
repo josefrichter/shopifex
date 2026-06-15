@@ -21,7 +21,7 @@ defmodule ShopifexWeb do
     web_module = Application.get_env(:shopifex, :web_module)
 
     quote do
-      use Phoenix.Controller, namespace: ShopifexWeb
+      use Phoenix.Controller, formats: [:html, :json]
       use Gettext, backend: ShopifexWeb.Gettext
 
       import Plug.Conn
@@ -29,35 +29,26 @@ defmodule ShopifexWeb do
     end
   end
 
-  def view do
+  @doc """
+  HTML rendering — Phoenix 1.7+ function components. `use ShopifexWeb, :html`
+  brings in `Phoenix.Component` (`~H`, `embed_templates`, `attr/3`) plus the
+  HTML helpers shared across Shopifex's `*HTML` modules and layouts.
+  """
+  def html do
     quote do
-      use Phoenix.View,
-        root: "lib/shopifex_web/templates",
-        namespace: ShopifexWeb
+      use Phoenix.Component
 
       # Import convenience functions from controllers
-      import Phoenix.Controller, only: [get_flash: 1, get_flash: 2, view_module: 1]
+      import Phoenix.Controller, only: [get_csrf_token: 0]
 
-      # Include shared imports and aliases for views
-      unquote(view_helpers())
+      unquote(html_helpers())
     end
   end
 
-  defp view_helpers do
-    web_module = Application.get_env(:shopifex, :web_module)
-
+  defp html_helpers do
     quote do
-      # Use all HTML functionality (forms, tags, etc)
-      import Phoenix.HTML
-      import Phoenix.HTML.Form
-      use PhoenixHTMLHelpers
       use Gettext, backend: ShopifexWeb.Gettext
-
-      # Import basic rendering functionality (render, render_layout, etc)
-      import Phoenix.View
-
-      import ShopifexWeb.ErrorHelpers
-      alias unquote(web_module).Router.Helpers, as: Routes
+      import Phoenix.HTML
     end
   end
 
