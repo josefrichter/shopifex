@@ -5,7 +5,7 @@ defmodule Shopifex.MixProject do
     [
       app: :shopifex,
       version: "2.5.0",
-      elixir: "~> 1.10",
+      elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       compilers: Mix.compilers(),
       deps: deps(),
@@ -50,18 +50,15 @@ defmodule Shopifex.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:phoenix, ">= 1.6.0"},
+      {:phoenix, "~> 1.8"},
       {:phoenix_live_view, "~> 1.0"},
-      {:phoenix_html_helpers, "~> 1.0"},
       {:phoenix_ecto, "~> 4.6"},
-      {:phoenix_view, "~> 2.0"},
       {:ecto_sql, "~> 3.12"},
       {:postgrex, ">= 0.0.0"},
       {:phoenix_html, ">= 4.0.0"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.0"},
       {:jose, "~> 1.11"},
-      {:plug_cowboy, "~> 2.0"},
       {:ex_doc, "~> 0.14", only: :dev, runtime: false},
       {:cors_plug, "~> 2.0"},
       {:req, "~> 0.5"},
