@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Getting Started with LiveView Shopify Apps · Shopifex</title>
+<meta name="description" content="A beginner-friendly guide to building embedded Shopify apps with Elixir, Phoenix LiveView and Shopifex. Build a live bestsellers dashboard, step by step." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+<style>
+  :root {
+    --green: #008060;
+    --green-dark: #004c3f;
+    --green-tint: #eef6f2;
+    --green-tint-2: #e0efe8;
+    --ink: #1a1c1d;
+    --muted: #5c6063;
+    --bg: #fbfbfa;
+    --card: #ffffff;
+    --border: #e6e6e3;
+    --code-bg: #0d1117;
+    --warn-bg: #fff8e6;
+    --warn-border: #f5d27a;
+    --tip-bg: #eef6f2;
+    --radius: 14px;
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+  body {
+    margin: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--green); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; font-size: 0.875em; }
+  :not(pre) > code {
+    background: var(--green-tint); color: var(--green-dark);
+    padding: 0.12em 0.4em; border-radius: 6px; font-weight: 500;
+    border: 1px solid var(--green-tint-2);
+  }
+  pre {
+    background: var(--code-bg); border-radius: 12px; padding: 18px 20px;
+    overflow-x: auto; font-size: 13.5px; line-height: 1.6; margin: 18px 0;
+    border: 1px solid #1f2630;
+  }
+  pre code { font-size: 13.5px; }
+
+  /* ---------- top bar ---------- */
+  header.top {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(251,251,250,0.86); backdrop-filter: saturate(180%) blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .top-inner {
+    max-width: var(--maxw); margin: 0 auto; padding: 14px 24px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; letter-spacing: -0.02em; }
+  .brand .dot { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg, var(--green), #00a884); display: grid; place-items: center; color: #fff; font-size: 15px; }
+  .top-spacer { flex: 1; }
+  .top-link { color: var(--muted); font-weight: 500; font-size: 14px; }
+  .top-link:hover { color: var(--ink); text-decoration: none; }
+
+  /* ---------- hero ---------- */
+  .hero { max-width: var(--maxw); margin: 0 auto; padding: 56px 24px 18px; }
+  .eyebrow {
+    display: inline-block; font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--green); background: var(--green-tint);
+    border: 1px solid var(--green-tint-2); padding: 5px 11px; border-radius: 999px; margin-bottom: 18px;
+  }
+  h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.07; letter-spacing: -0.03em; margin: 0 0 16px; font-weight: 800; }
+  h1 .grad { background: linear-gradient(120deg, var(--green), #00a884 60%, #2bb673); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { font-size: 19px; color: var(--muted); max-width: 720px; margin: 0 0 8px; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  .pill { font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 999px; background: var(--card); border: 1px solid var(--border); color: var(--muted); }
+  .pill b { color: var(--ink); }
+
+  /* ---------- layout ---------- */
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 24px; display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 48px; align-items: start; }
+  nav.toc { position: sticky; top: 84px; font-size: 14px; }
+  nav.toc .toc-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 700; margin: 0 0 12px; }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; counter-reset: toc; }
+  nav.toc li { margin: 2px 0; }
+  nav.toc a { display: block; color: var(--muted); padding: 6px 10px; border-radius: 8px; border-left: 2px solid transparent; font-weight: 500; }
+  nav.toc a:hover { background: var(--green-tint); color: var(--green-dark); text-decoration: none; }
+  main { min-width: 0; }
+
+  section { margin: 0 0 8px; padding: 18px 0 26px; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: 0; }
+  h2 { font-size: 27px; letter-spacing: -0.02em; margin: 26px 0 14px; font-weight: 750; scroll-margin-top: 84px; }
+  h2 .num { color: var(--green); font-weight: 800; margin-right: 10px; }
+  h3 { font-size: 19px; margin: 28px 0 8px; letter-spacing: -0.01em; }
+  p { margin: 12px 0; }
+  ul, ol.steps { margin: 12px 0; padding-left: 22px; }
+  li { margin: 6px 0; }
+
+  .callout { border-radius: 12px; padding: 14px 18px; margin: 18px 0; font-size: 15px; border: 1px solid var(--border); background: var(--card); }
+  .callout .tag { font-weight: 700; margin-right: 6px; }
+  .callout.tip { background: var(--tip-bg); border-color: var(--green-tint-2); }
+  .callout.tip .tag { color: var(--green-dark); }
+  .callout.warn { background: var(--warn-bg); border-color: var(--warn-border); }
+  .callout.warn .tag { color: #8a6d00; }
+  .filename { display: inline-block; font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--muted); background: var(--card); border: 1px solid var(--border); border-bottom: 0; border-radius: 8px 8px 0 0; padding: 5px 12px; margin: 18px 0 -18px; position: relative; z-index: 1; }
+  .filename + pre { border-top-left-radius: 0; }
+
+  /* ---------- preview widget ---------- */
+  .preview {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: 0 12px 40px -18px rgba(0,76,63,0.28); padding: 22px; margin: 30px 0 8px;
+  }
+  .pv-head { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .pv-title { font-weight: 700; font-size: 16px; }
+  .pv-live { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: var(--green-dark); background: var(--green-tint); padding: 4px 10px; border-radius: 999px; border: 1px solid var(--green-tint-2); }
+  .pv-live .blip { width: 8px; height: 8px; border-radius: 50%; background: #00a884; box-shadow: 0 0 0 0 rgba(0,168,132,0.6); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0,168,132,0.55);} 70% { box-shadow: 0 0 0 9px rgba(0,168,132,0);} 100% { box-shadow: 0 0 0 0 rgba(0,168,132,0);} }
+  .bar-row { display: grid; grid-template-columns: 150px 1fr 44px; align-items: center; gap: 14px; margin: 9px 0; }
+  .bar-label { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar-track { background: var(--green-tint); border-radius: 999px; height: 16px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #00a884, var(--green)); transition: width 700ms cubic-bezier(.2,.8,.2,1); }
+  .bar-value { font-variant-numeric: tabular-nums; font-weight: 700; text-align: right; font-size: 14px; }
+
+  /* ---------- flow diagram ---------- */
+  .flow { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; margin: 22px 0; }
+  .flow .step { flex: 1 1 150px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px; position: relative; }
+  .flow .step .n { width: 24px; height: 24px; border-radius: 7px; background: var(--green-tint); color: var(--green-dark); font-weight: 800; font-size: 13px; display: grid; place-items: center; margin-bottom: 8px; }
+  .flow .step b { font-size: 14px; display: block; }
+  .flow .step span { font-size: 13px; color: var(--muted); }
+  .flow .arrow { align-self: center; color: var(--green); font-weight: 800; }
+
+  footer { max-width: var(--maxw); margin: 0 auto; padding: 40px 24px 70px; color: var(--muted); font-size: 14px; }
+  footer .cols { display: flex; flex-wrap: wrap; gap: 40px; border-top: 1px solid var(--border); padding-top: 26px; }
+  footer h4 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink); }
+  footer a { display: block; color: var(--muted); margin: 5px 0; }
+
+  @media (max-width: 880px) {
+    .wrap { grid-template-columns: 1fr; gap: 8px; }
+    nav.toc { position: static; order: -1; border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--card); margin-bottom: 8px; }
+    nav.toc ol { columns: 2; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-inner">
+    <span class="brand"><span class="dot">S</span> Shopifex</span>
+    <span class="top-spacer"></span>
+    <a class="top-link" href="#what-is">Concepts</a>
+    <a class="top-link" href="#install">Install</a>
+    <a class="top-link" href="#bestsellers">Build the app</a>
+    <a class="top-link" href="https://github.com/josefrichter/shopifex">GitHub →</a>
+  </div>
+</header>
+
+<div class="hero">
+  <span class="eyebrow">Getting started</span>
+  <h1>Build a <span class="grad">live Shopify app</span><br />with Phoenix&nbsp;LiveView</h1>
+  <p class="lede">
+    New to Shopify apps but comfortable-ish with LiveView? This guide takes you from zero to a
+    real embedded app: a <b>Bestsellers dashboard</b> with a live table and chart that update in
+    real time as orders roll in &mdash; powered by <a href="https://github.com/josefrichter/shopifex">Shopifex&nbsp;3.0</a>.
+  </p>
+  <div class="meta-row">
+    <span class="pill">⏱ <b>~30&nbsp;min</b> read</span>
+    <span class="pill">🧪 Built for <b>Shopifex 3.0</b></span>
+    <span class="pill">⚡ Phoenix <b>1.8</b> · LiveView <b>1.x</b></span>
+    <span class="pill">🟢 No prior Shopify knowledge needed</span>
+  </div>
+
+  <!-- Live preview of what you'll build -->
+  <div class="preview" id="demo">
+    <div class="pv-head">
+      <span class="pv-title">🏆 Bestsellers &mdash; last 100 orders</span>
+      <span class="pv-live"><span class="blip"></span> Live</span>
+    </div>
+    <div id="demo-bars">
+      <div class="bar-row"><span class="bar-label">Cedar Candle</span><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><span class="bar-value" data-v>142</span></div>
+      <div class="bar-row"><span class="bar-label">Linen Tote</span><div class="bar-track"><div class="bar-fill" style="width:78%"></div></div><span class="bar-value" data-v>111</span></div>
+      <div class="bar-row"><span class="bar-label">Ceramic Mug</span><div class="bar-track"><div class="bar-fill" style="width:60%"></div></div><span class="bar-value" data-v>85</span></div>
+      <div class="bar-row"><span class="bar-label">Wool Socks</span><div class="bar-track"><div class="bar-fill" style="width:44%"></div></div><span class="bar-value" data-v>63</span></div>
+      <div class="bar-row"><span class="bar-label">Enamel Pin</span><div class="bar-track"><div class="bar-fill" style="width:29%"></div></div><span class="bar-value" data-v>41</span></div>
+    </div>
+  </div>
+  <p style="font-size:13px;color:var(--muted);margin-top:10px;">↑ A mockup of the finished widget. The bars nudge every few seconds to fake "live" updates &mdash; by the end of this guide yours will move for real.</p>
+</div>
+
+<div class="wrap">
+  <nav class="toc">
+    <p class="toc-title">On this page</p>
+    <ol>
+      <li><a href="#what-is">1 · What is a Shopify app?</a></li>
+      <li><a href="#how-auth-works">2 · How login works</a></li>
+      <li><a href="#prereqs">3 · Prerequisites</a></li>
+      <li><a href="#install">4 · Install Shopifex</a></li>
+      <li><a href="#first-load">5 · Your first app load</a></li>
+      <li><a href="#bestsellers">6 · Build the Bestsellers view</a></li>
+      <li><a href="#chart">7 · Add the chart</a></li>
+      <li><a href="#make-it-live">8 · Make it live</a></li>
+      <li><a href="#billing">9 · Charge with PaymentGuard</a></li>
+      <li><a href="#polaris">10 · Native UI (App Bridge)</a></li>
+      <li><a href="#next">11 · Where to next</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+  <section id="what-is">
+    <h2><span class="num">1</span>What even is a Shopify app?</h2>
+    <p>
+      A merchant runs their store on Shopify. An <b>app</b> adds features to that store &mdash; here,
+      a dashboard of best-selling products. The interesting part: your app doesn't replace the Shopify
+      admin, it lives <em>inside</em> it.
+    </p>
+    <p>When a merchant clicks your app, Shopify loads <b>your</b> web page in an <code>&lt;iframe&gt;</code> embedded in the Shopify admin. So your app is just a normal Phoenix app &mdash; with three twists:</p>
+    <ul>
+      <li><b>It runs in an iframe.</b> Browsers block third-party cookies there, so you can't lean on a cookie session the usual way.</li>
+      <li><b>Shopify proves who the merchant is</b> with a short-lived signed token (a JWT called an <code>id_token</code>) that <a href="https://shopify.dev/docs/api/app-bridge">App Bridge</a> attaches to every page load.</li>
+      <li><b>To call Shopify's API</b> (to read products, orders, etc.) your app needs an <b>access token</b> for that shop. You get one through <b>managed installation</b>.</li>
+    </ul>
+    <div class="callout tip"><span class="tag">The good news</span> Shopifex handles all three of these for you. You mostly write normal LiveView. The next two sections explain what's happening under the hood so it isn't magic &mdash; then we build.</div>
+  </section>
+
+  <section id="how-auth-works">
+    <h2><span class="num">2</span>How login works (managed installation)</h2>
+    <p>
+      Older Shopify apps did an OAuth redirect dance. Modern apps &mdash; and Shopifex 3.0 by default &mdash;
+      use <b>managed installation</b> with <b>token exchange</b>. The flow on every page load looks like this:
+    </p>
+    <div class="flow">
+      <div class="step"><div class="n">1</div><b>Merchant opens your app</b><span>Shopify renders your <code>/auth</code> URL in an iframe, with an <code>id_token</code>.</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="n">2</div><b>Shopifex verifies it</b><span>The <code>:managed_install</code> plug checks the <code>id_token</code>'s signature.</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="n">3</div><b>Token exchange</b><span>First time? It swaps the <code>id_token</code> for a long-lived <b>offline access token</b> and saves the shop.</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="n">4</div><b>Your LiveView renders</b><span><code>@current_shop</code> is ready. You call the Shopify API and draw the page.</span></div>
+    </div>
+    <p>
+      You don't write any of steps 1&ndash;3. You add a few lines of router wiring (the <code>auth_routes</code>
+      macro does the heavy lifting, coming up) and Shopifex runs the flow. Access tokens now expire, so
+      Shopifex also refreshes them in the background &mdash; you never think about it.
+    </p>
+    <h3>Wait &mdash; what <em>are</em> these tokens?</h3>
+    <p>This part trips everyone up, and it isn't Shopifex-specific. There are <b>two different tokens</b> doing two different jobs:</p>
+    <ul>
+      <li><b>The session token (<code>id_token</code>) proves <em>who</em> is asking.</b> It's a tiny signed <a href="https://jwt.io">JWT</a> that App Bridge hands your frontend on every load and attaches to requests to your backend. It's short-lived (~1 minute) and basically says "this really is shop <code>xyz.myshopify.com</code>, inside the Shopify admin." It is <b>not</b> an API key &mdash; you can't call the Shopify API with it.</li>
+      <li><b>The access token lets you actually <em>do</em> things.</b> It's the real credential for the Admin API. Your backend gets one by doing <b>token exchange</b>: handing Shopify a valid session token and receiving an access token back (this is the OAuth&nbsp;2.0 "token exchange" standard, <a href="https://datatracker.ietf.org/doc/html/rfc8693">RFC&nbsp;8693</a>).</li>
+    </ul>
+    <p>
+      Access tokens come in two flavors. <b>Online</b> tokens are tied to the logged-in user and die when they log out (good for "act as this person"). <b>Offline</b> tokens belong to the shop and keep working in the background &mdash; that's what embedded apps use for API calls, webhooks, and scheduled jobs. As of 2026, offline tokens also <b>expire</b> (≈1&nbsp;hour) and ship with a 90-day <b>refresh token</b> to mint a new one. Shopifex stores all of that and rotates it for you.
+    </p>
+    <p>
+      Why this whole dance instead of a normal login cookie? Because your app renders in an <code>&lt;iframe&gt;</code> on Shopify's domain, where browsers block third-party cookies &mdash; so there's no reliable cookie session to keep. Instead, Shopify re-proves identity on <em>every</em> request with a fresh signed token. Shopify's <a href="https://shopify.dev/docs/apps/build/authentication-authorization/session-tokens">session-token</a> and <a href="https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/token-exchange">token-exchange</a> docs go deeper.
+    </p>
+    <div class="callout tip"><span class="tag">Mental model</span> Session token = an ID badge you re-show at every door (proves who you are, expires in a minute). Access token = the keycard that actually opens doors (Shopifex keeps it charged). Token exchange is trading the badge for the keycard. And <code>@current_shop</code> is just "the logged-in shop" &mdash; every API call runs <em>as</em> it.</div>
+  </section>
+
+  <section id="prereqs">
+    <h2><span class="num">3</span>Prerequisites</h2>
+    <p>You'll need a few free things before writing code:</p>
+    <ul>
+      <li><b>A Shopify Partner account</b> &mdash; sign up at <a href="https://partners.shopify.com">partners.shopify.com</a>. Free.</li>
+      <li><b>A development store</b> &mdash; create one from the Partner dashboard. It's a fake store you can install your app on and place test orders in.</li>
+      <li><b>An app in the Partner dashboard</b> &mdash; this gives you an <b>API key</b> and <b>API secret key</b>. (The <a href="https://shopify.dev/docs/api/shopify-cli">Shopify CLI</a> can scaffold this and manage your <code>shopify.app.toml</code>, but it's optional.)</li>
+      <li><b>A Phoenix 1.8 app</b> with Ecto and a Postgres database.</li>
+      <li><b>A public tunnel</b> to your local machine &mdash; <a href="https://ngrok.com">ngrok</a> or <code>cloudflared</code>. Shopify must reach your dev server over HTTPS, so note your tunnel URL (e.g. <code>https://your-app.ngrok.io</code>).</li>
+    </ul>
+    <div class="callout warn"><span class="tag">Heads up</span> Everything below assumes a dev store. Real ("production") apps have extra review requirements &mdash; Shopifex ships the mandatory GDPR webhook handlers so you start on the right foot, but you'll still need protected-customer-data access for orders (see §4) and Shopify's app review before going live.</div>
+  </section>
+
+  <section id="install">
+    <h2><span class="num">4</span>Install Shopifex</h2>
+    <p>Add the dependency and run the installer.</p>
+    <span class="filename">mix.exs</span>
+<pre><code class="language-elixir">def deps do
+  [
+    {:shopifex, github: "josefrichter/shopifex"}
+  ]
+end</code></pre>
+<pre><code class="language-bash">mix deps.get
+mix shopifex.install   # generates the Shop/Plan/Grant schemas + a migration
+mix ecto.migrate</code></pre>
+    <p>
+      The installer prints config and router snippets &mdash; here's the shape of each. First, configuration:
+    </p>
+    <span class="filename">config/config.exs</span>
+<pre><code class="language-elixir">config :shopifex,
+  app_name: "Bestsellers",
+  shop_schema: MyApp.Shop,
+  repo: MyApp.Repo,
+  web_module: MyAppWeb,
+  # Scopes Shopifex's EnsureScopes plug checks for. Keep this in sync with the
+  # [access_scopes] you declare in shopify.app.toml (below).
+  scopes: "read_orders,read_products",
+  # Topics Shopify subscribes you to on install. We want order events.
+  webhook_topics: ["app/uninstalled", "orders/create"],
+  webhook_uri: "https://your-app.ngrok.io/webhook",
+  api_version: "2026-04",
+  api_key: System.get_env("SHOPIFY_API_KEY"),
+  secret: System.get_env("SHOPIFY_API_SECRET")</code></pre>
+    <div class="callout tip"><span class="tag">These are <em>your</em> app's choices</span> <code>webhook_topics</code> and <code>scopes</code> are picked for this tutorial. In your own app you'll swap in whatever events and data you need &mdash; but always keep <code>"app/uninstalled"</code> in <code>webhook_topics</code> (so you can clean up when a merchant removes your app), and only request scopes you actually use (Shopify's review gets stricter the more you ask for).</div>
+
+    <p>Next, declare the <b>access scopes</b> your app needs. With managed installation Shopify grants scopes from your <code>shopify.app.toml</code> at install time &mdash; and Shopifex's <code>EnsureScopes</code> check compares against the matching <code>scopes:</code> config above, so <b>keep the two in sync</b>. We need to read orders and products:</p>
+    <span class="filename">shopify.app.toml</span>
+<pre><code class="language-ini">[access_scopes]
+scopes = "read_orders,read_products"</code></pre>
+    <div class="callout tip"><span class="tag">Make the scope edit take effect</span> Editing <code>shopify.app.toml</code> alone does nothing until you deploy it &mdash; run <code>shopify app deploy</code> (or set the scopes in the Partner dashboard if you aren't using the CLI). Shopify then grants them the next time the merchant opens the app.</div>
+    <div class="callout warn"><span class="tag">Production note</span> <code>read_orders</code> is <a href="https://shopify.dev/docs/apps/launch/protected-customer-data">protected customer data</a>. It works freely on a <b>development</b> store, but a public app must request protected-customer-data access and pass Shopify's review before reading live orders in production.</div>
+
+    <p>Now wire up the router. The <code>auth_routes/1</code> macro adds the managed-install <code>/auth</code> route for you:</p>
+    <span class="filename">lib/my_app_web/router.ex</span>
+<pre><code class="language-elixir">require ShopifexWeb.Routes
+
+ShopifexWeb.Routes.pipelines()
+ShopifexWeb.Routes.auth_routes(MyAppWeb.AuthController)
+
+# Webhooks (Shopify POSTs order events here)
+scope "/webhook", MyAppWeb do
+  pipe_through [:shopify_webhook]
+  post "/", WebhookController, :action
+end
+
+# Our embedded app pages. `shopifex_live_session` makes @current_shop
+# available inside every LiveView in the block.
+scope "/", MyAppWeb do
+  pipe_through [:shopifex_browser, :shopify_session]
+
+  ShopifexWeb.Routes.shopifex_live_session :embedded do
+    live "/", BestsellersLive
+  end
+end</code></pre>
+
+    <p>Two tiny controllers complete the wiring &mdash; they're empty because Shopifex does the work:</p>
+    <span class="filename">lib/my_app_web/controllers/auth_controller.ex</span>
+<pre><code class="language-elixir">defmodule MyAppWeb.AuthController do
+  use MyAppWeb, :controller
+  use ShopifexWeb.AuthController
+  # Validation + managed installation are handled for you.
+end</code></pre>
+    <span class="filename">lib/my_app_web/controllers/webhook_controller.ex</span>
+<pre><code class="language-elixir">defmodule MyAppWeb.WebhookController do
+  use MyAppWeb, :controller
+  use ShopifexWeb.WebhookController
+  # Default GDPR handlers included. We'll add an orders/create handler in §8.
+end</code></pre>
+
+    <div class="callout tip"><span class="tag">One more thing</span> Shopify sends webhooks as raw JSON whose body must be read for HMAC verification. Make sure your endpoint uses Shopifex's body reader in <code>Plug.Parsers</code> &mdash; the installer notes this:
+<pre style="margin-top:10px"><code class="language-elixir">plug Plug.Parsers,
+  parsers: [:urlencoded, :multipart, :json],
+  body_reader: {ShopifexWeb.CacheBodyReader, :read_body, []},
+  json_decoder: Phoenix.json_library()</code></pre></div>
+
+    <h3>What about the Shopify CLI?</h3>
+    <p>
+      Shopify's <a href="https://shopify.dev/docs/api/shopify-cli/app">CLI</a> is built around its JavaScript
+      templates, but a couple of commands are still handy for a Phoenix app &mdash; and one you can skip:
+    </p>
+    <ul>
+      <li><code>shopify app config link</code> &mdash; <b>pulls</b> your app's settings from the dashboard into a local <code>shopify.app.toml</code>. Run it once to create the file.</li>
+      <li><code>shopify app deploy</code> &mdash; pushes <code>shopify.app.toml</code> (access scopes, app config) <b>up to Shopify</b> and cuts an app version. This is how a scope change reaches production. It does <b>not</b> deploy your Phoenix server &mdash; you host that yourself (Fly, Gigalixir, …). <span style="color:var(--muted)">(<code>shopify app config push</code> was removed; <code>deploy</code> replaces it.)</span></li>
+    </ul>
+    <div class="callout warn" style="border-color:#f1b0a8;background:#fdecea"><span class="tag" style="color:#c0271b">⛔ Don't use <code>shopify app dev</code> with an Elixir app</span> The CLI's all-in-one <code>shopify app dev</code> assumes a <b>Node project</b> &mdash; it expects a <code>package.json</code>, injects <code>PORT</code>/<code>BACKEND_PORT</code> env vars, and wants to own the dev server and tunnel itself. That doesn't fit Phoenix. <b>Start the server and tunnel yourself instead:</b> run <code>mix phx.server</code> in one terminal (your app on <code>localhost:4000</code>) and <code>ngrok http 4000</code> in another, then put the tunnel's HTTPS URL in both the Partner-dashboard <b>App URL</b> and the <code>webhook_uri</code> config. <span style="color:var(--muted)">(There's also no <code>shopify app install</code> command &mdash; you install onto a dev store just by opening the app and accepting the permission prompt.)</span></div>
+  </section>
+
+  <section id="first-load">
+    <h2><span class="num">5</span>Your first app load</h2>
+    <p>
+      First, give Phoenix the credentials your config reads. In the Partner dashboard open this app's
+      <b>API credentials</b> page, copy the <b>API key</b> and <b>API secret key</b>, and export them in the
+      same shell you'll start Phoenix from (they must belong to the app whose App URL you set below):
+    </p>
+<pre><code class="language-bash">export SHOPIFY_API_KEY=your_api_key
+export SHOPIFY_API_SECRET=your_api_secret_key</code></pre>
+    <p style="font-size:13px;color:var(--muted);margin-top:-6px">For a permanent setup, read them in <code>config/runtime.exs</code> instead of exporting each time.</p>
+    <p>
+      Then point your app's "App URL" in the Partner dashboard at <code>https://your-app.ngrok.io/auth</code>,
+      start Phoenix (<code>mix phx.server</code>) and your tunnel, and open the app from your dev store's
+      Apps menu. On that first open, Shopifex:
+    </p>
+    <ol>
+      <li>verifies the <code>id_token</code>,</li>
+      <li>exchanges it for an offline access token,</li>
+      <li>saves a <code>Shop</code> row (URL + token + scopes),</li>
+      <li>subscribes your webhook topics, and</li>
+      <li>renders <code>BestsellersLive</code> at <code>/</code>.</li>
+    </ol>
+    <div class="callout warn"><span class="tag">Keep three things in sync</span> Wherever you see <code>your-app.ngrok.io</code>, use your <em>current</em> tunnel host &mdash; identical in three places: the config <code>webhook_uri</code>, the Partner-dashboard <b>App URL</b>, and the running tunnel. ngrok's free URLs change on every restart, so re-paste the new host in all three when it does.</div>
+    <div class="callout warn"><span class="tag">Blank screen or an error?</span> The first embedded load is where setup mistakes surface. Check that (1) <code>SHOPIFY_API_KEY</code> / <code>SHOPIFY_API_SECRET</code> are set and belong to this app, (2) the App URL ends in <code>/auth</code> and points at your current tunnel, (3) both the tunnel and <code>mix phx.server</code> are running, and (4) your server log shows the <code>id_token</code> being verified (not a redirect loop).</div>
+    <p>Right now <code>BestsellersLive</code> doesn't exist yet, so let's build it.</p>
+  </section>
+
+  <section id="bestsellers">
+    <h2><span class="num">6</span>Build the Bestsellers view</h2>
+    <p>
+      "Bestsellers" = which products sold the most units recently. Shopify has no single
+      "bestsellers" field, so we'll ask for recent <b>orders</b>, look at their line items, and
+      tally quantities per product. That's a great example because it's a real GraphQL query plus a
+      little Elixir.
+    </p>
+
+    <h3>The data layer</h3>
+    <p>
+      Keep Shopify calls out of your LiveView. A small context function runs the query through
+      <code>Shopifex.API.graphql/3</code> &mdash; the library's one entrypoint for the Admin API, which
+      keeps the shop's access token fresh for you and returns <code>{:ok, data}</code> or <code>{:error, reason}</code>.
+    </p>
+    <span class="filename">lib/my_app/analytics.ex</span>
+<pre><code class="language-elixir">defmodule MyApp.Analytics do
+  @moduledoc "Bestseller analytics for a shop."
+
+  @query """
+  query Bestsellers($orders: Int!) {
+    orders(first: $orders, sortKey: CREATED_AT, reverse: true) {
+      edges {
+        node {
+          lineItems(first: 100) {
+            edges { node { title quantity } }
+          }
+        }
+      }
+    }
+  }
+  """
+
+  @doc "Top `limit` products by units sold across the last `sample` orders."
+  def bestsellers(shop, limit \\ 5, sample \\ 100) do
+    case Shopifex.API.graphql(shop, @query, %{orders: sample}) do
+      {:ok, data} ->
+        rows =
+          data
+          |> line_items()
+          |> tally()
+          |> Enum.sort_by(fn {_title, qty} -> qty end, :desc)
+          |> Enum.take(limit)
+          |> Enum.map(fn {title, qty} -> %{title: title, qty: qty} end)
+
+        {:ok, rows}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Flatten every order's line items into one list.
+  defp line_items(data) do
+    for %{"node" => order} <- data["orders"]["edges"],
+        %{"node" => item} <- order["lineItems"]["edges"],
+        do: item
+  end
+
+  # Sum quantity per product title -> %{title => total_qty}.
+  defp tally(items) do
+    Enum.reduce(items, %{}, fn %{"title" => title, "quantity" => qty}, acc ->
+      Map.update(acc, title, qty, &(&1 + qty))
+    end)
+  end
+end</code></pre>
+
+    <h3>The LiveView</h3>
+    <p>
+      Because the route is inside <code>shopifex_live_session</code>, the shop is already in
+      <code>socket.assigns.current_shop</code> on mount. Fetch the rows and assign them:
+    </p>
+    <span class="filename">lib/my_app_web/live/bestsellers_live.ex</span>
+<pre><code class="language-elixir">defmodule MyAppWeb.BestsellersLive do
+  use MyAppWeb, :live_view
+  alias MyApp.Analytics
+
+  @impl true
+  def mount(_params, _session, socket) do
+    {:ok, load(socket)}
+  end
+
+  defp load(socket) do
+    case Analytics.bestsellers(socket.assigns.current_shop) do
+      {:ok, rows} -> assign(socket, rows: rows, error: nil)
+      {:error, _reason} -> assign(socket, rows: [], error: "Couldn't load orders.")
+    end
+  end
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    &lt;div class="dashboard"&gt;
+      &lt;h1&gt;🏆 Bestsellers&lt;/h1&gt;
+      &lt;p :if={@error} class="error"&gt;{@error}&lt;/p&gt;
+
+      &lt;table&gt;
+        &lt;thead&gt;
+          &lt;tr&gt;&lt;th&gt;#&lt;/th&gt;&lt;th&gt;Product&lt;/th&gt;&lt;th&gt;Units sold&lt;/th&gt;&lt;/tr&gt;
+        &lt;/thead&gt;
+        &lt;tbody&gt;
+          &lt;tr :for={{row, i} &lt;- Enum.with_index(@rows, 1)}&gt;
+            &lt;td&gt;{i}&lt;/td&gt;
+            &lt;td&gt;{row.title}&lt;/td&gt;
+            &lt;td&gt;{row.qty}&lt;/td&gt;
+          &lt;/tr&gt;
+        &lt;/tbody&gt;
+      &lt;/table&gt;
+    &lt;/div&gt;
+    """
+  end
+end</code></pre>
+    <p>Open the app and you've got a live table of bestsellers. Place a test order in your dev store, refresh, and watch it change. Next we'll make it prettier &mdash; then make it update without a refresh.</p>
+    <div class="callout warn"><span class="tag">Empty table?</span> A brand-new dev store has no orders. Create a product, then place a test order or two from the store's admin so there's something to rank.</div>
+  </section>
+
+  <section id="chart">
+    <h2><span class="num">7</span>Add the chart (no JavaScript)</h2>
+    <p>
+      The fun thing about LiveView: the server already has the numbers, so a bar chart is just HTML and
+      CSS &mdash; no charting library, no JS hook. Each bar's width is a percentage of the top seller.
+      Add a helper and a chart block to the same LiveView.
+    </p>
+    <span class="filename">lib/my_app_web/live/bestsellers_live.ex (additions)</span>
+<pre><code class="language-elixir"># A percentage width relative to the #1 seller.
+defp pct(qty, rows) do
+  # Only ever called while iterating non-empty @rows, so Enum.max/1 is safe.
+  max = rows |> Enum.map(& &1.qty) |> Enum.max()
+  round(qty / max * 100)
+end</code></pre>
+    <p>And the markup &mdash; drop this above the table in <code>render/1</code>:</p>
+    <span class="filename">inside ~H"""  ...  """</span>
+<pre><code class="language-elixir">&lt;div class="chart"&gt;
+  &lt;div :for={row &lt;- @rows} class="bar-row"&gt;
+    &lt;span class="bar-label"&gt;{row.title}&lt;/span&gt;
+    &lt;div class="bar-track"&gt;
+      &lt;div class="bar-fill" style={"width: #{pct(row.qty, @rows)}%"}&gt;&lt;/div&gt;
+    &lt;/div&gt;
+    &lt;span class="bar-value"&gt;{row.qty}&lt;/span&gt;
+  &lt;/div&gt;
+&lt;/div&gt;</code></pre>
+    <p>
+      Now the CSS. On <b>LiveView&nbsp;1.2+</b> you can keep it <em>right next to the component</em> with
+      <a href="https://hexdocs.pm/phoenix_live_view/Phoenix.LiveView.ColocatedCSS.html">colocated CSS</a> &mdash;
+      no separate <code>app.css</code> to hunt through. Add a <code>&lt;style&gt;</code> block at the very top of
+      your <code>~H</code> template (it must be first), tagged with a small module:
+    </p>
+    <span class="filename">lib/my_app_web/live/bestsellers_live.ex — top of render/1's ~H</span>
+<pre><code class="language-elixir">&lt;style :type={MyAppWeb.ColocatedCSS}&gt;
+  .bar-row { display: grid; grid-template-columns: 150px 1fr 44px;
+             gap: 14px; align-items: center; margin: 8px 0; }
+  .bar-track { background: #eef6f2; border-radius: 999px; height: 16px; overflow: hidden; }
+  .bar-fill  { height: 100%; border-radius: 999px;
+               background: linear-gradient(90deg, #00a884, #008060);
+               transition: width 700ms cubic-bezier(.2,.8,.2,1); }
+  .bar-value { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+&lt;/style&gt;
+&lt;div class="chart"&gt;
+  &lt;!-- the bar rows from above --&gt;
+&lt;/div&gt;</code></pre>
+    <p>That <code>:type</code> points at a one-time module that tells LiveView how to extract the CSS. The simplest version passes it through unchanged (add scoping later with CSS <code>@scope</code> if you want it):</p>
+    <span class="filename">lib/my_app_web/colocated_css.ex</span>
+<pre><code class="language-elixir">defmodule MyAppWeb.ColocatedCSS do
+  use Phoenix.LiveView.ColocatedCSS
+
+  @impl true
+  def transform("style", _attrs, css, _meta), do: {:ok, css, []}
+end</code></pre>
+    <p>
+      At build time LiveView extracts every colocated block into one file. A <code>phx.new</code> app on
+      Phoenix&nbsp;1.8.8+ already wires the bundler for this &mdash; you just import it once in
+      <code>assets/css/app.css</code>:
+    </p>
+<pre><code class="language-css">@import "phoenix-colocated/my_app/colocated.css";</code></pre>
+    <p>Because LiveView swaps only the changed attributes, when the numbers update the bars <em>animate</em> to their new lengths for free.</p>
+    <div class="callout tip"><span class="tag">Don't want colocated CSS?</span> It's optional. A <code>phx.new</code> app on Phoenix&nbsp;1.8 also ships <a href="https://tailwindcss.com">Tailwind</a> (v4) + daisyUI, so you could instead style the bars with utility classes (the data-driven width still needs an inline <code>style</code>), or just drop the rules in <code>app.css</code> the old way. For a "real" charting library, push the data to a <a href="https://hexdocs.pm/phoenix_live_view/js-interop.html">JS hook</a> &mdash; but for a ranked bar chart, server-rendered HTML is simpler, accessible, and animates itself.</div>
+  </section>
+
+  <section id="make-it-live">
+    <h2><span class="num">8</span>Make it live</h2>
+    <p>Two upgrades, easiest first.</p>
+
+    <h3>8a · Auto-refresh on a timer</h3>
+    <p>Re-fetch every 30 seconds. Only do this for a <em>connected</em> LiveView (mount runs twice &mdash; once for the initial HTML, once over the socket):</p>
+<pre><code class="language-elixir">@impl true
+def mount(_params, _session, socket) do
+  if connected?(socket), do: :timer.send_interval(30_000, :refresh)
+  {:ok, load(socket)}
+end
+
+@impl true
+def handle_info(:refresh, socket), do: {:noreply, load(socket)}</code></pre>
+    <p>That's already "live" in the LiveView sense. But polling Shopify every 30s is wasteful, and there's a lag. Let's react to the actual event instead.</p>
+
+    <h3>8b · Real-time with webhooks + PubSub</h3>
+    <p>
+      We subscribed to <code>orders/create</code> back in §4. When a customer checks out, Shopify POSTs to
+      <code>/webhook</code>, Shopifex verifies the HMAC and calls your <code>handle_topic/3</code>. We broadcast
+      that over Phoenix PubSub. PubSub here isn't really about "many viewers" (most stores have one admin) &mdash;
+      it's the bridge between two <em>processes</em>: the webhook lands in a short-lived controller process, while
+      your dashboard is a separate, long-lived LiveView process. PubSub is how the first tells the second. Any
+      dashboards that happen to be open all update; that's just a bonus. (<code>MyApp.PubSub</code> is the server
+      <code>mix phx.new</code> already started in your <code>application.ex</code>.)
+    </p>
+    <span class="filename">lib/my_app_web/controllers/webhook_controller.ex</span>
+<pre><code class="language-elixir">defmodule MyAppWeb.WebhookController do
+  use MyAppWeb, :controller
+  use ShopifexWeb.WebhookController
+
+  # A new order came in — tell every dashboard for this shop.
+  def handle_topic(conn, shop, "orders/create") do
+    Phoenix.PubSub.broadcast(MyApp.PubSub, "bestsellers:#{shop.id}", :order_created)
+    send_resp(conn, 200, "ok")
+  end
+
+  # Keep Shopifex's default GDPR handlers for every other topic.
+  def handle_topic(conn, shop, topic), do: super(conn, shop, topic)
+end</code></pre>
+    <div class="callout warn"><span class="tag">Don't drop the GDPR defaults</span> The moment you define your own <code>handle_topic/3</code>, you replace <b>all</b> of Shopifex's clauses &mdash; including the mandatory <code>shop/redact</code> / <code>customers/redact</code> / <code>customers/data_request</code> handlers Shopify requires for app review. The catch-all <code>super(conn, shop, topic)</code> on the last line keeps them.</div>
+
+    <p>Now the LiveView subscribes on connect and reloads when an order lands:</p>
+<pre><code class="language-elixir">@impl true
+def mount(_params, _session, socket) do
+  shop = socket.assigns.current_shop
+
+  if connected?(socket) do
+    Phoenix.PubSub.subscribe(MyApp.PubSub, "bestsellers:#{shop.id}")
+  end
+
+  {:ok, load(socket)}
+end
+
+@impl true
+def handle_info(:order_created, socket), do: {:noreply, load(socket)}</code></pre>
+    <p>
+      Now place an order through the storefront's <b>test checkout</b> (Shopify's Bogus Gateway / a test card) &mdash;
+      that reliably fires an <code>orders/create</code> webhook. With no refresh, the table re-ranks and the bars
+      glide to their new lengths. That round trip (Shopify → webhook → PubSub → every LiveView → animated diff) is
+      the whole promise of LiveView, and you wrote maybe 15 lines for it.
+    </p>
+    <div class="callout warn"><span class="tag">No update?</span> Orders created from the <em>admin</em> (especially draft orders) often don't emit <code>orders/create</code>, so the live update won't fire even though your code is correct &mdash; use the storefront test checkout. Confirm the webhook arrived by watching your server log for the <code>POST /webhook</code>.</div>
+    <div class="callout tip"><span class="tag">Tip</span> Broadcasting a bare <code>:order_created</code> and re-querying is the simplest correct version. Once it works, an optimization is to send the order's line items in the message and update the tallies in memory &mdash; no extra Shopify call per order.</div>
+    <div class="callout"><span class="tag">Is the webhook worth it?</span> Honestly &mdash; for a single-admin store, the 30-second timer in §8a is often plenty. The webhook path earns its keep when "an order happened" should also do <em>other</em> things (send a notification, recompute a cache, enqueue an <a href="https://hexdocs.pm/oban">Oban</a> job), or when you want zero-lag updates without hammering Shopify. Reach for it when you have a reason, not by default.</div>
+  </section>
+
+  <section id="billing">
+    <h2><span class="num">9</span>Charge for it with PaymentGuard</h2>
+    <p>
+      Most apps want money. Shopifex's <b>PaymentGuard</b> is a plug you put in front of a route: if the shop
+      hasn't paid, it redirects them to a plan-selection page, runs Shopify's checkout, records the payment, and
+      lets them back in &mdash; you don't write any of that flow. The installer already generated the
+      <code>Plan</code> and <code>Grant</code> schemas; here's the wiring.
+    </p>
+
+    <span class="filename">config/config.exs (add)</span>
+<pre><code class="language-elixir">config :shopifex,
+  payment_guard: MyApp.Shops.PaymentGuard,
+  plan_schema: MyApp.Shops.Plan,
+  grant_schema: MyApp.Shops.Grant,
+  payment_redirect_uri: "https://your-app.ngrok.io/payment/complete"</code></pre>
+
+    <span class="filename">lib/my_app/shops/payment_guard.ex</span>
+<pre><code class="language-elixir">defmodule MyApp.Shops.PaymentGuard do
+  use Shopifex.PaymentGuard
+  # Sensible defaults: finds grants in the DB, decrements usage, creates grants on payment.
+end</code></pre>
+
+    <span class="filename">lib/my_app_web/controllers/payment_controller.ex</span>
+<pre><code class="language-elixir">defmodule MyAppWeb.PaymentController do
+  use MyAppWeb, :controller
+  use ShopifexWeb.PaymentController
+  # Renders the plan picker and handles the Shopify charge callback.
+end</code></pre>
+
+    <p>Add the payment routes (the plan page renders with Polaris from Shopify's CDN &mdash; nothing to serve yourself):</p>
+    <span class="filename">lib/my_app_web/router.ex (add)</span>
+<pre><code class="language-elixir">ShopifexWeb.Routes.payment_routes(MyAppWeb.PaymentController)</code></pre>
+
+    <p>
+      A <b>plan</b> is just a database row that <em>grants</em> a named capability. Create one (in
+      <code>iex -S mix</code> or a seed script) &mdash; here a $9.99/month plan that grants <code>"pro"</code>:
+    </p>
+<pre><code class="language-elixir">Shopifex.Shops.create_plan(%{
+  name: "Pro",
+  price: "9.99",
+  type: "recurring_application_charge",
+  test: true,            # test charge — Shopify shows the approval screen but never bills
+  grants: ["pro"]
+})</code></pre>
+
+    <p>Now protect the dashboard: add a pipeline with the guard and run the live route through it.</p>
+    <span class="filename">lib/my_app_web/router.ex</span>
+<pre><code class="language-elixir">pipeline :require_pro do
+  plug Shopifex.Plug.PaymentGuard, "pro"
+end
+
+scope "/", MyAppWeb do
+  pipe_through [:shopifex_browser, :shopify_session, :require_pro]
+
+  ShopifexWeb.Routes.shopifex_live_session :embedded do
+    live "/", BestsellersLive
+  end
+end</code></pre>
+    <p>
+      A shop with no <code>"pro"</code> grant now gets bounced to the plan picker; after they approve the charge
+      in Shopify, a <code>Grant</code> row is created and they land back on the dashboard. Guards can also be
+      usage-limited (e.g. "100 runs") via the plan's <code>usages</code> field.
+    </p>
+    <div class="callout tip"><span class="tag">Test charges</span> With <code>test: true</code>, Shopify shows the real approval screen but never charges the card &mdash; ideal on a dev store. Flip it off for production plans.</div>
+  </section>
+
+  <section id="polaris">
+    <h2><span class="num">10</span>Make it look native with App Bridge &amp; Polaris</h2>
+    <p>
+      Right now your dashboard looks like <em>your</em> HTML. To make it feel like part of the Shopify admin
+      &mdash; matching type, buttons, a real title bar, toasts &mdash; you load two small scripts Shopify hosts:
+      <b>App Bridge</b> (the admin chrome plus a global <code>shopify</code> JS object) and <b>Polaris web
+      components</b> (Shopify's design-system elements).
+    </p>
+    <div class="callout tip"><span class="tag">No React required</span> Polaris used to mean React. As of late 2025, <a href="https://polaris-react.shopify.com/">Polaris React is deprecated</a> and <b>Polaris web components</b> are the default &mdash; plain custom HTML elements (<code>&lt;s-button&gt;</code>, <code>&lt;s-section&gt;</code>…) that work in <em>any</em> framework, including server-rendered LiveView. A great fit here.</div>
+
+    <p>Add both CDN scripts and your API-key meta tag to the embedded layout's <code>&lt;head&gt;</code>:</p>
+    <span class="filename">lib/my_app_web/components/layouts/root.html.heex (in &lt;head&gt;)</span>
+<pre><code class="language-elixir">&lt;meta name="shopify-api-key" content={Application.fetch_env!(:shopifex, :api_key)} /&gt;
+&lt;script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"&gt;&lt;/script&gt;
+&lt;script src="https://cdn.shopify.com/shopifycloud/polaris.js"&gt;&lt;/script&gt;</code></pre>
+    <p>App Bridge auto-initializes from that meta tag &mdash; no setup code. Now wrap your dashboard in Polaris elements; <code>s-page</code> even renders a title bar in the admin <em>outside</em> your iframe:</p>
+    <span class="filename">inside BestsellersLive's render/1</span>
+<pre><code class="language-elixir">&lt;s-page heading="Bestsellers"&gt;
+  &lt;s-button slot="primary-action"&gt;Export&lt;/s-button&gt;
+
+  &lt;s-section heading="Top products"&gt;
+    &lt;!-- your existing chart + table markup goes right here --&gt;
+  &lt;/s-section&gt;
+&lt;/s-page&gt;</code></pre>
+    <p>
+      The <code>shopify</code> global also gives you imperative bits like toasts and the product picker. From a
+      LiveView you reach those through a tiny JS <a href="https://hexdocs.pm/phoenix_live_view/js-interop.html">hook</a> &mdash;
+      e.g. show a toast when the server pushes an event:
+    </p>
+<pre><code class="language-js">// assets/js/app.js — trigger from the server with push_event(socket, "toast", %{message: "Saved"})
+Hooks.Toast = {
+  mounted() {
+    this.handleEvent("toast", ({message}) =&gt; shopify.toast.show(message))
+  }
+}</code></pre>
+    <div class="callout warn"><span class="tag">Use the new element names</span> Older tutorials show <code>&lt;ui-title-bar&gt;</code> / <code>&lt;ui-nav-menu&gt;</code>. Those were renamed to the <code>s-*</code> components (<code>s-page</code>, <code>s-app-nav</code>, <code>s-modal</code>…). The <a href="https://shopify.dev/docs/api/app-home">App Home reference</a> has the current set.</div>
+  </section>
+
+  <section id="next">
+    <h2><span class="num">11</span>Where to next</h2>
+    <p>You've got a real embedded app: authenticated, calling the Shopify API, billable, native-looking, and updating in real time. From here:</p>
+    <ul>
+      <li><b>Deploy it.</b> Host your Phoenix app (<a href="https://fly.io">Fly.io</a>, <a href="https://gigalixir.com">Gigalixir</a>, your own box), point the Partner-dashboard App URL at the deployed HTTPS URL, and run <code>shopify app deploy</code> to publish your scopes and config.</li>
+      <li><b>Understand the internals.</b> The <a href="https://github.com/josefrichter/shopifex/blob/master/docs/parity-matrix.md">parity matrix</a> shows exactly how Shopifex compares to Shopify's official JS and Ruby libraries (token exchange, HMAC, billing, and the honest gaps).</li>
+      <li><b>Read the reference.</b> The <a href="https://github.com/josefrichter/shopifex">README</a> covers config, the payment guard, SPA mode, and LiveView setup in depth.</li>
+    </ul>
+
+    <h3>Official Shopify resources</h3>
+    <p>Shopify maintains official libraries for Ruby, Node, PHP, Go and .NET &mdash; but <b>not Elixir</b>, which is exactly the gap Shopifex fills. Their tutorials and templates are all JavaScript, yet they're still the best reference for how the platform behaves:</p>
+    <ul>
+      <li><a href="https://shopify.dev/docs/apps/getting-started/build-app-example">Build a Shopify app (React Router)</a> &mdash; Shopify's official getting-started tutorial.</li>
+      <li><a href="https://github.com/Shopify/shopify-app-template-react-router">shopify-app-template-react-router</a> &mdash; the current official starter (JS/React; the older Node and Remix templates are superseded).</li>
+      <li><a href="https://shopify.dev/docs/apps/build/authentication-authorization/session-tokens">Session tokens</a> &amp; <a href="https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/token-exchange">token exchange</a> &mdash; the §2 auth concepts, straight from the source.</li>
+      <li><a href="https://github.com/Shopify/shopify-app-js">shopify-app-js</a> &amp; <a href="https://github.com/Shopify/shopify_app">shopify_app (Ruby)</a> &mdash; the official frameworks Shopifex is modeled after.</li>
+    </ul>
+    <div class="callout tip"><span class="tag">Recap</span> The whole app was: a couple of router macros, a few small controllers, one context module, and one LiveView. Shopifex handled login, token refresh, webhook verification, billing, and GDPR compliance &mdash; so you could focus on the part that's actually yours.</div>
+  </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="cols">
+    <div>
+      <h4>Shopifex</h4>
+      <a href="https://github.com/josefrichter/shopifex">GitHub repository</a>
+      <a href="https://github.com/josefrichter/shopifex#readme">README</a>
+      <a href="https://github.com/josefrichter/shopifex/blob/master/docs/parity-matrix.md">Parity matrix</a>
+    </div>
+    <div>
+      <h4>Shopify docs</h4>
+      <a href="https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/token-exchange">Token exchange</a>
+      <a href="https://shopify.dev/docs/api/app-bridge">App Bridge</a>
+      <a href="https://shopify.dev/docs/api/admin-graphql">Admin GraphQL API</a>
+    </div>
+    <div>
+      <h4>Elixir</h4>
+      <a href="https://hexdocs.pm/phoenix_live_view">Phoenix LiveView</a>
+      <a href="https://hexdocs.pm/phoenix/Phoenix.PubSub.html">Phoenix.PubSub</a>
+    </div>
+  </div>
+  <p style="margin-top:28px">Built for Shopifex 3.0 · This guide is part of the repository and can be published with GitHub Pages.</p>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/elixir.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/ini.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/css.min.js"></script>
+<script>
+  if (window.hljs) { hljs.highlightAll(); }
+
+  // Cosmetic only: nudge the hero demo bars so the "Live" badge feels real.
+  (function () {
+    var values = document.querySelectorAll('#demo-bars [data-v]');
+    var fills = document.querySelectorAll('#demo-bars .bar-fill');
+    if (!values.length) return;
+    var base = [142, 111, 85, 63, 41];
+    setInterval(function () {
+      var nums = base.map(function (v) { return v + Math.floor(Math.random() * 7); });
+      var max = Math.max.apply(null, nums);
+      nums.forEach(function (n, i) {
+        values[i].textContent = n;
+        fills[i].style.width = Math.round((n / max) * 100) + '%';
+      });
+    }, 2600);
+  })();
+</script>
+</body>
+</html>
