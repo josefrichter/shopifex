@@ -35,7 +35,9 @@ defmodule Shopifex.Plug.ShopifySession do
     expected_hmac = Shopifex.Plug.build_hmac(conn)
     received_hmac = Shopifex.Plug.get_hmac(conn)
 
-    if expected_hmac == received_hmac do
+    # Constant-time compare to avoid leaking the expected HMAC byte-by-byte.
+    # `get_hmac/1` returns nil when no HMAC is present, so guard for a binary.
+    if is_binary(received_hmac) and Plug.Crypto.secure_compare(expected_hmac, received_hmac) do
       conn
       |> do_new_session()
     else
