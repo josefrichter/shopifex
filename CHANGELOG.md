@@ -108,9 +108,15 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
 - **Macro billing flow now creates the grant.** `Shopifex.RedirectAfterAgent`
   `set/2` and `get/1` disagreed on key type (string vs integer), so the
   charge-id keyed lookup in `complete_payment/2` missed and the `Grant` was never
-  created. Both now coerce the key consistently. (Documented limitation: the
-  default `RedirectAfterAgent` is an in-memory, single-node `Agent` — swap it via
-  `config :shopifex, :redirect_after_agent` for multi-node deploys.)
+  created. Both now coerce the key consistently. (Accepted limitation: the default
+  `RedirectAfterAgent` is an in-memory, single-node `Agent` — supply a persistent
+  `config :shopifex, :redirect_after_agent` before using macro billing across
+  multiple nodes, or the cache miss on the confirmation redirect drops the grant.)
+- **Managed-install token refresh is driven by token expiry, not `updated_at`.**
+  `Shopifex.Plug.ManagedInstall` now re-exchanges the offline access token when
+  `token_expires_at` is within ~10 minutes of expiry (consistent with
+  `Shopifex.Auth`), instead of when the shop row's `updated_at` aged past 50
+  minutes — an unrelated update to the shop row no longer masks an expired token.
 
 ### Changed
 

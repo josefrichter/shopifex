@@ -187,39 +187,44 @@ defmodule Shopifex.Plug.ManagedInstallTest do
 
   # --- existing fresh shop ---------------------------------------------------
 
-  test "existing fresh shop: builds the session without a token exchange" do
-    Shops.create_shop(%{
-      url: @shop,
-      scope: "read_orders",
-      access_token: "existing_token",
-      token_expires_at:
-        DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second),
-      refresh_token: "existing_refresh"
-    })
+  test "existing fresh token: no re-exchange, even when an unrelated update aged updated_at" do
+    shop =
+      Shops.create_shop(%{
+        url: @shop,
+        scope: "read_orders",
+        access_token: "existing_token",
+        token_expires_at:
+          DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second),
+        refresh_token: "existing_refresh"
+      })
+
+    # Age the row far past the old 50-minute `updated_at` threshold. Staleness is
+    # now measured by token_expires_at, so this must NOT force a re-exchange.
+    backdate_shop!(shop, 60 * 60)
 
     conn =
       ManagedInstall.call(conn_with(%{"id_token" => token(), "shop" => @shop, "host" => "h"}), [])
 
     refute_received :token_exchanged
     refute_received {:after_install, _}
+    refute_received {:after_exchange, _}
     assert Shopifex.Plug.current_shop(conn).access_token == "existing_token"
   end
 
   # --- existing stale shop ---------------------------------------------------
 
-  test "existing stale shop: re-exchanges, refreshes lifecycle fields, reconciles webhooks, but skips install hooks" do
-    shop =
-      Shops.create_shop(%{
-        url: @shop,
-        scope: "read_orders",
-        access_token: "stale_token",
-        token_expires_at:
-          DateTime.utc_now() |> DateTime.add(60, :second) |> DateTime.truncate(:second),
-        refresh_token: "stale_refresh"
-      })
+  test "existing expired token: re-exchanges (despite a recent updated_at), refreshes lifecycle fields, reconciles webhooks, fires after_exchange, skips install hooks" do
+    Shops.create_shop(%{
+      url: @shop,
+      scope: "read_orders",
+      access_token: "stale_token",
+      # Already expired — and updated_at is fresh (default on insert), so only the
+      # token_expires_at check can trigger the re-exchange.
+      token_expires_at:
+        DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second),
+      refresh_token: "stale_refresh"
+    })
 
-    # Older than the 50-minute staleness window.
-    backdate_shop!(shop, 60 * 60)
     stub_shopify()
 
     conn =

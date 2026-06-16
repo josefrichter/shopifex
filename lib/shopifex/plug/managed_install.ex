@@ -12,8 +12,8 @@ defmodule Shopifex.Plug.ManagedInstall do
      offline access token (RFC 8693) and persists the full token lifecycle
      (`access_token`, `token_expires_at`, `refresh_token`,
      `refresh_token_expires_at`).
-  3. If the shop exists but its token is older than the staleness window
-     (50 min, comfortably inside the 1h TTL), it re-exchanges to refresh.
+  3. If the shop exists but its stored access token is within ~10 minutes of
+     expiry (`token_expires_at`) or already expired, it re-exchanges to refresh.
   4. Otherwise it builds the session from the stored shop directly.
 
   New installs are persisted through the configurable
@@ -63,12 +63,12 @@ defmodule Shopifex.Plug.ManagedInstall do
 
   require Logger
 
-  # How old the shop's access_token may get before we re-exchange it on the next
-  # id_token-bearing request. Shopify-issued expiring offline access tokens have
-  # a 1-hour TTL; re-exchanging at 50 minutes keeps the token live on landing.
-  # Background paths (schedulers, webhooks) refresh via the refresh_token in
-  # `Shopifex.Auth` instead — they don't depend on this plug.
-  @refresh_after_seconds 50 * 60
+  # Re-exchange the offline access token on the next id_token-bearing embedded
+  # load once it is within this window of expiry (or already expired). Shopify's
+  # expiring offline tokens have a ~1-hour TTL; a 10-minute buffer keeps the token
+  # live through the page load. Background paths (schedulers, webhooks) refresh via
+  # the refresh_token in `Shopifex.Auth` and don't depend on this plug.
+  @refresh_before_expiry_seconds 10 * 60
 
   def init(opts), do: opts
 
@@ -124,16 +124,22 @@ defmodule Shopifex.Plug.ManagedInstall do
     end
   end
 
+  # Staleness is measured against `token_expires_at` — the token's actual lifetime
+  # — NOT the row's `updated_at`, which any unrelated shop update would reset (an
+  # expired token would then look fresh and skip re-exchange). A nil
+  # `token_expires_at` is a non-expiring token (legacy / custom app); like
+  # `Shopifex.Auth.ensure_fresh_token/1` it is treated as fresh — background
+  # refresh isn't possible, and a reactive 401 still refreshes on API calls.
   defp token_stale?(shop) do
-    case Map.get(shop, :updated_at) do
-      %NaiveDateTime{} = updated_at ->
-        NaiveDateTime.diff(NaiveDateTime.utc_now(), updated_at, :second) >= @refresh_after_seconds
+    case Map.get(shop, :token_expires_at) do
+      %DateTime{} = expires_at ->
+        DateTime.diff(expires_at, DateTime.utc_now()) <= @refresh_before_expiry_seconds
 
-      %DateTime{} = updated_at ->
-        DateTime.diff(DateTime.utc_now(), updated_at, :second) >= @refresh_after_seconds
+      %NaiveDateTime{} = expires_at ->
+        NaiveDateTime.diff(expires_at, NaiveDateTime.utc_now()) <= @refresh_before_expiry_seconds
 
       _ ->
-        true
+        false
     end
   end
 

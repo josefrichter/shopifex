@@ -388,6 +388,16 @@ Add payment routes to `router.ex`:
 ShopifexWeb.Routes.payment_routes(MyAppWeb.PaymentController)
 ```
 
+> ⚠️ **Multi-node deploys (Fly.io, etc.):** the default `Shopifex.RedirectAfterAgent`
+> is an **in-memory, single-node** `Agent`. Shopify's confirmation can return to
+> `/payment/complete` on a *different* node than the one that handled
+> `/payment/select-plan`, where the cache miss makes `complete_payment/2` return
+> `{:error, :forbidden}` **and the grant is never created**. Before relying on the
+> macro billing path across multiple nodes, supply a persistent implementation via
+> `config :shopifex, :redirect_after_agent, MyApp.PersistentRedirectAfter` (back it
+> with a `charge_id → redirect_after` table or a distributed store; keep `get/1`
+> one-shot). On a single node the default is fine.
+
 To manage plans, I recommend using [kaffy admin package](https://github.com/aesmail/kaffy)
 
 Now you can protect routes or controller actions with the `Shopifex.Plug.PaymentGuard` plug. Here is an example of it in action on an admin link

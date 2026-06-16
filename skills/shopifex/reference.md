@@ -90,6 +90,12 @@ For slow handlers, enqueue Oban and return 200 immediately (avoid Shopify's webh
   `list_available_plans_for_guard/2`. Defaults query the Grant schema.
 - `plug Shopifex.Plug.PaymentGuard, "guard_name"` — redirects to the plan picker when the
   shop has no grant unlocking `"guard_name"`; on payment a Grant is created.
+- **Multi-node caveat:** the default `Shopifex.RedirectAfterAgent` is an in-memory,
+  single-node `Agent`. On multi-node deploys (Fly.io, …) Shopify's confirmation can return
+  to `/payment/complete` on a different node → cache miss → `complete_payment/2` returns
+  `{:error, :forbidden}` and **no Grant is created**. Configure a persistent
+  `config :shopifex, :redirect_after_agent` (a `charge_id → redirect_after` table or
+  distributed store; keep `get/1` one-shot) before using macro billing across nodes.
 - **Plan** schema: `name`, `price`, `type` (`"recurring_application_charge"` |
   `"application_charge"`), `test`, `grants` (array of guard strings), `features`, `usages`
   (nil = unlimited; integer = usage-limited grant), `annual`, `trial_days`.

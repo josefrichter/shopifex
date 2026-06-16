@@ -705,6 +705,7 @@ end</code></pre>
       usage-limited (e.g. "100 runs") via the plan's <code>usages</code> field.
     </p>
     <div class="callout tip"><span class="tag">Test charges</span> With <code>test: true</code>, Shopify shows the real approval screen but never charges the card &mdash; ideal on a dev store. Flip it off for production plans.</div>
+    <div class="callout warn" style="border-color:#f1b0a8;background:#fdecea"><span class="tag" style="color:#c0271b">Multi-node deploys</span> The default redirect cache (<code>Shopifex.RedirectAfterAgent</code>) is <b>in-memory, single-node</b>. On a multi-node host (Fly.io, etc.), Shopify's confirmation can land on a different node than the one that started the charge &mdash; the cache misses and <b>the grant is never created</b>. Before going multi-node, point <code>config :shopifex, :redirect_after_agent</code> at a persistent implementation (a <code>charge_id → redirect_after</code> table or distributed store). Single-node is fine as-is.</div>
   </section>
 
   <section id="polaris">
