@@ -252,24 +252,44 @@ defmodule ShopifexWeb.PaymentController do
         redirect_after_agent =
           Application.get_env(:shopifex, :redirect_after_agent, Shopifex.RedirectAfterAgent)
 
-        # Shopify's API doesn't provide an HMAC validation on
-        # this return-url. Use the token param in the redirect_after
-        # url that is associated with this charge_id to validate
-        # the request and get the current shop
-        with redirect_after when redirect_after != nil <-
-               redirect_after_agent.get(charge_id),
-             redirect_after <- URI.decode_www_form(redirect_after),
-             shop when not is_nil(shop) <- Shopifex.Shops.get_shop_by_url(shop_url) do
-          payment_guard = Application.fetch_env!(:shopifex, :payment_guard)
+        # Shopify's API doesn't provide an HMAC validation on this return-url.
+        # The redirect-after entry stored against this charge_id at `select_plan`
+        # time doubles as the anti-forgery check: no entry => we never started
+        # this charge here, so reject.
+        case redirect_after_agent.get(charge_id) do
+          nil ->
+            # A missing entry is *expected* to mean forgery — but with the default
+            # in-memory Shopifex.RedirectAfterAgent it also happens, legitimately,
+            # whenever Shopify's /payment/complete redirect lands on a different
+            # node than the one that ran select_plan. In that case the merchant
+            # was charged but the Grant is never created. Log loudly so this is
+            # observable instead of a silent dropped grant — a node-local cache on
+            # a multi-node deploy is the usual cause; switch to a persistent store
+            # (Shopifex.RedirectAfter.Ecto) via config :shopifex, :redirect_after_agent.
+            Logger.error(
+              "[shopifex] complete_payment: no redirect-after entry for charge_id=" <>
+                "#{inspect(charge_id)} (shop=#{inspect(shop_url)}). Treating as forbidden. " <>
+                "If the merchant was actually charged, the grant was just dropped: the default " <>
+                "RedirectAfterAgent is in-memory and node-local, so the confirmation redirect " <>
+                "missed on a multi-node deploy. Configure a persistent " <>
+                "config :shopifex, :redirect_after_agent (e.g. Shopifex.RedirectAfter.Ecto)."
+            )
 
-          plan = payment_guard.get_plan(plan_id)
-
-          {:ok, grant} = payment_guard.create_grant(shop, plan, charge_id)
-
-          after_payment(conn, shop, plan, grant, redirect_after)
-        else
-          _ ->
             {:error, :forbidden}
+
+          redirect_after ->
+            redirect_after = URI.decode_www_form(redirect_after)
+
+            case Shopifex.Shops.get_shop_by_url(shop_url) do
+              nil ->
+                {:error, :forbidden}
+
+              shop ->
+                payment_guard = Application.fetch_env!(:shopifex, :payment_guard)
+                plan = payment_guard.get_plan(plan_id)
+                {:ok, grant} = payment_guard.create_grant(shop, plan, charge_id)
+                after_payment(conn, shop, plan, grant, redirect_after)
+            end
         end
       end
 

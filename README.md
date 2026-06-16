@@ -388,15 +388,32 @@ Add payment routes to `router.ex`:
 ShopifexWeb.Routes.payment_routes(MyAppWeb.PaymentController)
 ```
 
-> ⚠️ **Multi-node deploys (Fly.io, etc.):** the default `Shopifex.RedirectAfterAgent`
-> is an **in-memory, single-node** `Agent`. Shopify's confirmation can return to
-> `/payment/complete` on a *different* node than the one that handled
-> `/payment/select-plan`, where the cache miss makes `complete_payment/2` return
-> `{:error, :forbidden}` **and the grant is never created**. Before relying on the
-> macro billing path across multiple nodes, supply a persistent implementation via
-> `config :shopifex, :redirect_after_agent, MyApp.PersistentRedirectAfter` (back it
-> with a `charge_id → redirect_after` table or a distributed store; keep `get/1`
-> one-shot). On a single node the default is fine.
+> ⚠️ **Multi-node deploys (Fly.io, etc.):** use `Shopifex.RedirectAfter.Ecto`, not
+> the in-memory default. The billing flow stores a `charge_id → redirect_after`
+> entry at `/payment/select-plan` and reads it back at `/payment/complete`. The
+> default `Shopifex.RedirectAfterAgent` keeps that in a **node-local** `Agent`, so
+> when Shopify's confirmation returns to a *different* node the lookup misses —
+> `complete_payment/2` returns `{:error, :forbidden}` **and the grant is never
+> created** (the merchant is still charged). The shipped, DB-backed
+> `Shopifex.RedirectAfter.Ecto` is safe across nodes:
+>
+> ```elixir
+> config :shopifex, :redirect_after_agent, Shopifex.RedirectAfter.Ecto
+> ```
+>
+> Add its backing table (`mix shopifex.install` generates both the config and this
+> migration for new apps):
+>
+> ```elixir
+> create table(:shopifex_charge_redirects, primary_key: false) do
+>   add :charge_id, :bigint, primary_key: true
+>   add :redirect_after, :text, null: false
+>   add :inserted_at, :utc_datetime, null: false
+> end
+> ```
+>
+> On a single node the in-memory default is fine. Either way, a missed lookup now
+> logs an actionable `Logger.error` instead of failing silently.
 
 To manage plans, I recommend using [kaffy admin package](https://github.com/aesmail/kaffy)
 

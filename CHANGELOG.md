@@ -82,6 +82,12 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
   on its `401`, so App Bridge's `authenticatedFetch` transparently retries with a
   fresh `id_token` (embedded tokens live ~60s) instead of surfacing the error.
 - `jose` is now an explicit dependency.
+- `Shopifex.RedirectAfter.Ecto` — a persistent, multi-node-safe implementation of
+  the `Shopifex.RedirectAfterAgent` behaviour, backed by a `shopifex_charge_redirects`
+  table (no supervised process to add). Configure with
+  `config :shopifex, :redirect_after_agent, Shopifex.RedirectAfter.Ecto`;
+  `mix shopifex.install` generates the config + migration. Use it instead of the
+  in-memory default whenever the app runs on more than one node.
 
 ### Security
 
@@ -108,10 +114,18 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
 - **Macro billing flow now creates the grant.** `Shopifex.RedirectAfterAgent`
   `set/2` and `get/1` disagreed on key type (string vs integer), so the
   charge-id keyed lookup in `complete_payment/2` missed and the `Grant` was never
-  created. Both now coerce the key consistently. (Accepted limitation: the default
-  `RedirectAfterAgent` is an in-memory, single-node `Agent` — supply a persistent
-  `config :shopifex, :redirect_after_agent` before using macro billing across
-  multiple nodes, or the cache miss on the confirmation redirect drops the grant.)
+  created. Both now coerce the key consistently.
+- **Multi-node billing no longer drops grants.** The billing redirect store is
+  the in-memory, node-local `Shopifex.RedirectAfterAgent` by default, so on a
+  multi-node deploy (Fly.io, multiple pods) Shopify's `/payment/complete`
+  redirect could land on a node with no cache entry — the merchant was charged
+  but no `Grant` was created, **silently**. Two changes fix this: (1)
+  `Shopifex.RedirectAfter.Ecto` is a shipped, DB-backed implementation that is
+  safe across nodes (see Added), and `mix shopifex.install` now generates it as
+  the default for new apps; (2) when the lookup misses, `complete_payment/2` logs
+  an actionable `Logger.error` instead of returning a silent `{:error,
+  :forbidden}`, so a misconfigured single-node store on a redundant deploy is
+  observable rather than invisible.
 - **Managed-install token refresh is driven by token expiry, not `updated_at`.**
   `Shopifex.Plug.ManagedInstall` now re-exchanges the offline access token when
   `token_expires_at` is within ~10 minutes of expiry (consistent with

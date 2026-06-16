@@ -3,19 +3,26 @@ defmodule Shopifex.RedirectAfterAgent do
   Caches the post-payment "redirect after" URL keyed by Shopify charge id, so
   `complete_payment/2` can recover it when Shopify redirects the merchant back.
 
-  ## Limitations
+  ## Multi-node deploys: use `Shopifex.RedirectAfter.Ecto`
 
-  The default implementation is an in-memory `Agent` local to **one node**. A
+  This default implementation is an in-memory `Agent` local to **one node**. A
   charge confirmation can redirect to `/payment/complete` on a *different* node
   than the one that handled `select_plan` (e.g. behind a load balancer / on a
   multi-node deploy like Fly.io), in which case the lookup misses and the grant
   is not created. It is intermittent and won't show up in single-node dev.
 
-  For multi-node deploys, swap in a persistent implementation (a `charges` table
-  keyed by charge id, a distributed cache, …) via config — this module is just
-  the `@behaviour`'s default:
+  If you run more than one node, configure the shipped, multi-node-safe
+  `Shopifex.RedirectAfter.Ecto` (a DB-backed table) instead:
 
-      config :shopifex, :redirect_after_agent, MyApp.PersistentRedirectAfter
+      config :shopifex, :redirect_after_agent, Shopifex.RedirectAfter.Ecto
+
+  `mix shopifex.install` generates that config and the backing migration for new
+  apps. Any module implementing this behaviour works — the config seam is just
+  `Application.get_env(:shopifex, :redirect_after_agent, __MODULE__)`.
+
+  When a lookup misses, `complete_payment/2` no longer fails silently: it logs an
+  actionable `Logger.error` (the usual cause is this node-local cache on a
+  multi-node deploy), so dropped grants are observable rather than invisible.
 
   `set/2` and `get/1` agree on key type: both coerce a binary charge id to an
   integer (matching the integer `grants.charge_id` column), so the string id that
