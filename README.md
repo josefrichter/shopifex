@@ -73,9 +73,10 @@ We also checked all active forks of upstream shopifex. None had implemented mana
 
 ## Learning resources
 
-- **[Getting Started tutorial](docs/getting-started.html)** — a beginner-friendly,
-  GitHub-Pages-ready walkthrough that builds a live "Bestsellers" LiveView dashboard
-  (auth, Admin GraphQL, webhooks + PubSub, billing, App Bridge/Polaris).
+- **[Getting Started tutorial](https://josefrichter.github.io/shopifex/)** — a
+  beginner-friendly walkthrough (source: [`docs/index.html`](docs/index.html)) that
+  builds a live "Bestsellers" LiveView dashboard (auth, Admin GraphQL, webhooks +
+  PubSub, billing, App Bridge/Polaris).
 - **[Parity matrix](docs/parity-matrix.md)** — how Shopifex compares to Shopify's
   official JS and Ruby libraries.
 
