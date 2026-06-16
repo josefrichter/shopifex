@@ -1,4 +1,26 @@
 defmodule Shopifex.RedirectAfterAgent do
+  @moduledoc """
+  Caches the post-payment "redirect after" URL keyed by Shopify charge id, so
+  `complete_payment/2` can recover it when Shopify redirects the merchant back.
+
+  ## Limitations
+
+  The default implementation is an in-memory `Agent` local to **one node**. A
+  charge confirmation can redirect to `/payment/complete` on a *different* node
+  than the one that handled `select_plan` (e.g. behind a load balancer / on a
+  multi-node deploy like Fly.io), in which case the lookup misses and the grant
+  is not created. It is intermittent and won't show up in single-node dev.
+
+  For multi-node deploys, swap in a persistent implementation (a `charges` table
+  keyed by charge id, a distributed cache, …) via config — this module is just
+  the `@behaviour`'s default:
+
+      config :shopifex, :redirect_after_agent, MyApp.PersistentRedirectAfter
+
+  `set/2` and `get/1` agree on key type: both coerce a binary charge id to an
+  integer (matching the integer `grants.charge_id` column), so the string id that
+  `PaymentController` produces from a Shopify GID round-trips correctly.
+  """
   use Agent
   require Logger
 
@@ -9,9 +31,9 @@ defmodule Shopifex.RedirectAfterAgent do
   @callback get(charge_id :: String.t() | pos_integer()) :: String.t() | nil
 
   @doc """
-  Set a redirect url in cache with key charge_id
+  Set a redirect url in cache with key charge_id.
   """
-  @callback set(charge_id :: pos_integer(), redirect_uri :: String.t()) :: :ok
+  @callback set(charge_id :: String.t() | pos_integer(), redirect_uri :: String.t()) :: :ok
 
   def start_link(_) do
     Logger.info("Starting redirect_uri agent")
@@ -27,6 +49,13 @@ defmodule Shopifex.RedirectAfterAgent do
     Agent.update(__MODULE__, &Map.delete(&1, charge_id))
     redirect_uri
   end
+
+  # Coerce to the same key type as `get/1` — `PaymentController` passes the charge
+  # id as a string (the trailing segment of the Shopify GID), but the return-url
+  # `charge_id` is looked up as an integer. Without this they never match and the
+  # grant is silently never created.
+  def set(charge_id, redirect_uri) when is_binary(charge_id),
+    do: set(String.to_integer(charge_id), redirect_uri)
 
   def set(charge_id, redirect_uri) do
     Logger.info("Storing redirect_uri for charge #{charge_id}")

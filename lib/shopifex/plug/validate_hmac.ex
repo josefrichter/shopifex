@@ -10,8 +10,13 @@ defmodule Shopifex.Plug.ValidateHmac do
     * When the request includes a `timestamp` parameter (Shopify always sends one
       for admin-load and app-proxy flows) it must be within
       `config :shopifex, :hmac_timestamp_tolerance_seconds` (default `90`) of now,
-      closing the replay window. Configure a larger tolerance only if you have a
-      specific reason to.
+      closing the replay window. App-proxy/storefront requests that can legitimately
+      lag past 90s need a larger tolerance. (A request that carries no `timestamp`
+      skips the freshness check.)
+
+  This plug **only verifies the signature** — it does not load the shop into
+  `conn.assigns`. App-proxy consumers that need `current_shop` should load it in a
+  downstream plug (e.g. by `Shopifex.Shops.get_shop_by_url(conn.params["shop"])`).
   """
   import Plug.Conn
   require Logger

@@ -4,12 +4,21 @@ defmodule Shopifex.Plug.ManagedInstallTest.Callbacks do
 
   @impl true
   def after_install(shop) do
+    notify({:after_install, shop})
+    :ok
+  end
+
+  @impl true
+  def after_exchange(_shop, new?) do
+    notify({:after_exchange, new?})
+    :ok
+  end
+
+  defp notify(msg) do
     case Application.get_env(:shopifex, :managed_install_test_pid) do
-      pid when is_pid(pid) -> send(pid, {:after_install, shop})
+      pid when is_pid(pid) -> send(pid, msg)
       _ -> :ok
     end
-
-    :ok
   end
 end
 
@@ -147,6 +156,7 @@ defmodule Shopifex.Plug.ManagedInstallTest do
     assert_received :token_exchanged
     assert_received :webhook_created
     assert_received {:after_install, _shop}
+    assert_received {:after_exchange, true}
 
     shop = Shops.get_shop_by_url(@shop)
     assert shop.access_token == "offline_access_token"
@@ -218,7 +228,9 @@ defmodule Shopifex.Plug.ManagedInstallTest do
     assert_received :token_exchanged
     # A re-exchange reconciles webhooks (idempotent self-healing)...
     assert_received :webhook_created
-    # ...but must NOT re-run install hooks.
+    # ...runs the every-exchange hook with new?=false...
+    assert_received {:after_exchange, false}
+    # ...but must NOT re-run the first-install hook.
     refute_received {:after_install, _}
 
     refreshed = Shops.get_shop_by_url(@shop)

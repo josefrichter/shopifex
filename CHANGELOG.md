@@ -56,10 +56,11 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
   `Shopifex.Plug.ManagedInstall` verifies `id_token`, requests **expiring**
   tokens (`expiring=1`), persists the full token lifecycle, and re-exchanges on
   a 50-minute staleness window.
-- `Shopifex.ManagedInstall.Callbacks` — configurable `insert_shop/1` and
-  `after_install/1` hooks for the managed-install path
-  (`config :shopifex, managed_install_callbacks: MyApp.Callbacks`). Token
-  refreshes of an existing shop skip the callbacks. The legacy
+- `Shopifex.ManagedInstall.Callbacks` — configurable `insert_shop/1`,
+  `after_install/1` (first install only), and `after_exchange/2` (every exchange —
+  install **and** refresh, with a `new?` flag) hooks for the managed-install path
+  (`config :shopifex, managed_install_callbacks: MyApp.Callbacks`). Callbacks run
+  synchronously in the request — spawn a `Task` for slow work. The legacy
   `AuthController.after_install/3` / `insert_shop/1` callbacks apply only to the
   OAuth controller flow.
 - `Shopifex.Plug.session_token/1` now also reads the `id_token` query parameter
@@ -96,6 +97,20 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
   app-proxy / session HMAC verification and session-token (`id_token`)
   verification accept the previous secret as well, so rotating the app secret
   doesn't drop in-flight webhooks or sessions.
+- **LiveView session no longer carries the shop's tokens.**
+  `ShopifexWeb.LiveSession.put_shop_in_session/1` now serializes only the shop
+  **URL** (not the `current_shop` struct), and `on_mount` reloads the shop
+  server-side. The LV session is signed but not encrypted (readable client-side),
+  so the old behavior exposed `access_token` / `refresh_token`.
+
+### Fixed
+
+- **Macro billing flow now creates the grant.** `Shopifex.RedirectAfterAgent`
+  `set/2` and `get/1` disagreed on key type (string vs integer), so the
+  charge-id keyed lookup in `complete_payment/2` missed and the `Grant` was never
+  created. Both now coerce the key consistently. (Documented limitation: the
+  default `RedirectAfterAgent` is an in-memory, single-node `Agent` — swap it via
+  `config :shopifex, :redirect_after_agent` for multi-node deploys.)
 
 ### Changed
 

@@ -28,13 +28,26 @@ defmodule Shopifex.ManagedInstall.Callbacks do
         end
       end
 
-  Both callbacks are optional — `use Shopifex.ManagedInstall.Callbacks` provides
+  All callbacks are optional — `use Shopifex.ManagedInstall.Callbacks` provides
   defaults (`insert_shop/1` delegates to `Shopifex.Shops.create_shop/1`,
-  `after_install/1` is a no-op). The plug always configures webhooks on first
-  install itself, regardless of `after_install/1`.
+  `after_install/1` and `after_exchange/2` are no-ops). The plug always configures
+  webhooks itself (first install and on every re-exchange), regardless of the hooks.
 
-  Token *refreshes* of an already-installed shop do not invoke these callbacks —
-  they only update the token-lifecycle fields via `Shopifex.Shops.update_shop/2`.
+  ## When each hook runs
+
+  | Hook                | First install | Token re-exchange (refresh) |
+  |---------------------|:-------------:|:---------------------------:|
+  | `insert_shop/1`     | ✅            | — (uses `update_shop/2`)    |
+  | `after_install/1`   | ✅            | —                           |
+  | `after_exchange/2`  | ✅            | ✅                          |
+
+  Use `after_exchange/2` for side effects that must run on refreshes too (it
+  receives `new?`); use `after_install/1` for one-time install work.
+
+  > **Callbacks run synchronously inside the plug**, in the merchant's request.
+  > Anything slow (a profile fetch, snapshot, external sync) will block the page
+  > load — spawn your own supervised `Task` for it. The library does not wrap
+  > callbacks in a Task.
   """
 
   @doc """
@@ -48,6 +61,14 @@ defmodule Shopifex.ManagedInstall.Callbacks do
   (after persistence and webhook configuration). Defaults to a no-op.
   """
   @callback after_install(shop :: Shopifex.Plug.shop()) :: any()
+
+  @doc """
+  Run app-specific side effects after **every** successful token exchange — both
+  first install (`new?` is `true`) and a refresh re-exchange (`new?` is `false`).
+  Defaults to a no-op. Use this for work that must also happen on refreshes (e.g.
+  re-sync external state), where `after_install/1` would only fire once.
+  """
+  @callback after_exchange(shop :: Shopifex.Plug.shop(), new? :: boolean()) :: any()
 
   @doc false
   def module do
@@ -64,7 +85,10 @@ defmodule Shopifex.ManagedInstall.Callbacks do
       @impl true
       def after_install(_shop), do: :ok
 
-      defoverridable insert_shop: 1, after_install: 1
+      @impl true
+      def after_exchange(_shop, _new?), do: :ok
+
+      defoverridable insert_shop: 1, after_install: 1, after_exchange: 2
     end
   end
 end

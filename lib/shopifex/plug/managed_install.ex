@@ -17,12 +17,25 @@ defmodule Shopifex.Plug.ManagedInstall do
   4. Otherwise it builds the session from the stored shop directly.
 
   New installs are persisted through the configurable
-  `Shopifex.ManagedInstall.Callbacks` hooks (`insert_shop/1`, `after_install/1`),
-  so apps can customise shop creation and post-install side effects without
-  re-implementing token exchange. Webhooks are configured on first install only.
+  `Shopifex.ManagedInstall.Callbacks` hooks (`insert_shop/1`, `after_install/1`,
+  `after_exchange/2`), so apps can customise shop creation and side effects
+  without re-implementing token exchange.
+
+  Webhooks are reconciled via `Shopifex.Shops.configure_webhooks/1` on first
+  install **and on every re-exchange** (idempotent self-heal — see that function).
+  Reconciliation issues one `webhookSubscriptions` query (plus a create per missing
+  topic) per re-exchange, i.e. at most once per shop per ~50 min of activity; it
+  does **not** run on the hot per-load path that builds the session from a fresh
+  shop directly.
 
   If no recognised `id_token` is present, this plug is a no-op — the request
   falls through to the legacy OAuth flow (`Shopifex.Plug.ShopifySession`).
+
+  > **No cookieless `auth_token` redirect bridge.** App Bridge supplies a fresh
+  > `id_token` on every embedded load, so there is no need to bridge auth across a
+  > cookieless redirect — this plug deliberately ships no `Phoenix.Token` redirect
+  > branch. If your app issues its own signed-token redirect, keep that as a custom
+  > plug clause; the library will not handle it.
 
   ## Usage
 
@@ -196,25 +209,26 @@ defmodule Shopifex.Plug.ManagedInstall do
 
   # First install: persist through the configurable managed-install callbacks so
   # apps can customise creation, then configure webhooks (first install only) and
-  # run app-specific post-install side effects.
+  # run the first-install + every-exchange side-effect hooks.
   defp persist_shop(_new? = true, _fallback, attrs) do
     callbacks = Shopifex.ManagedInstall.Callbacks.module()
     shop = callbacks.insert_shop(attrs)
     Shopifex.Shops.configure_webhooks(shop)
     callbacks.after_install(shop)
+    callbacks.after_exchange(shop, true)
     shop
   end
 
   # Token refresh of an already-installed shop: update the token-lifecycle
-  # fields, and reconcile webhooks so subscriptions self-heal. Install hooks do
-  # NOT re-run. `configure_webhooks/1` is idempotent — it only creates missing
-  # subscriptions — so this recovers from a webhook registration that failed at
-  # install time, or topics added to `:webhook_topics` after install. It runs at
-  # the token-exchange cadence (≤ the 50-minute staleness window), never on the
-  # hot per-load path that builds the session from a fresh shop directly.
+  # fields, reconcile webhooks (idempotent self-heal — recovers from a failed
+  # install registration or topics added to `:webhook_topics` later; runs at the
+  # ≤50-minute re-exchange cadence, never on the hot per-load path), and run the
+  # every-exchange hook (NOT the first-install hooks).
   defp persist_shop(_new? = false, shop, attrs) do
+    callbacks = Shopifex.ManagedInstall.Callbacks.module()
     shop = Shopifex.Shops.update_shop(shop, attrs)
     Shopifex.Shops.configure_webhooks(shop)
+    callbacks.after_exchange(shop, false)
     shop
   end
 

@@ -28,11 +28,22 @@ defmodule ShopifexWeb.LiveSession do
   @doc """
   Return a map of session values to include in the liveview session. This
   will be merged with other session values and available in the on_mount.
+
+  Only the shop's URL is serialized (not the shop struct) — the LiveView session
+  is signed but **not encrypted**, so it is readable client-side; storing the
+  struct would leak `access_token` / `refresh_token`. `on_mount` reloads the shop
+  from the URL server-side.
   """
   def put_shop_in_session(conn) do
     session_token = Shopifex.Plug.session_token(conn)
-    current_shop = Shopifex.Plug.current_shop(conn)
-    %{"session_token" => session_token, "current_shop" => current_shop}
+
+    shop_url =
+      case Shopifex.Plug.current_shop(conn) do
+        nil -> nil
+        shop -> Shopifex.Shops.get_url(shop)
+      end
+
+    %{"session_token" => session_token, "shop_url" => shop_url}
   end
 
   @doc """
@@ -68,7 +79,7 @@ defmodule ShopifexWeb.LiveSession do
   """
   def on_mount(:assign_shop_to_socket, _params, session, socket) do
     assigns = %{
-      current_shop: session["current_shop"],
+      current_shop: load_shop(session["shop_url"]),
       session_token: session["session_token"]
     }
 
@@ -77,12 +88,17 @@ defmodule ShopifexWeb.LiveSession do
 
   @compile {:no_warn_undefined, Phoenix.LiveView}
   def on_mount(:embedded, _params, session, socket) do
-    shop = session["current_shop"]
+    case load_shop(session["shop_url"]) do
+      nil ->
+        {:halt, Phoenix.LiveView.redirect(socket, to: "/auth")}
 
-    if shop do
-      {:cont, Phoenix.Component.assign(socket, current_shop: shop, session_token: nil)}
-    else
-      {:halt, Phoenix.LiveView.redirect(socket, to: "/auth")}
+      shop ->
+        {:cont, Phoenix.Component.assign(socket, current_shop: shop, session_token: nil)}
     end
   end
+
+  # Reload the shop server-side from the URL stored in the session, so secrets
+  # never reach the (signed-but-unencrypted) client session.
+  defp load_shop(nil), do: nil
+  defp load_shop(shop_url), do: Shopifex.Shops.get_shop_by_url(shop_url)
 end
