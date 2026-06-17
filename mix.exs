@@ -55,13 +55,15 @@ defmodule Shopifex.MixProject do
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix_ecto, "~> 4.6"},
       {:ecto_sql, "~> 3.12"},
-      {:postgrex, ">= 0.0.0"},
+      # The library itself never calls Postgrex; it's only needed to run the
+      # dummy app's repo in dev/test. Downstream apps bring their own driver.
+      {:postgrex, ">= 0.0.0", only: [:dev, :test]},
       {:phoenix_html, ">= 4.0.0"},
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.0"},
       {:jose, "~> 1.11"},
       {:ex_doc, "~> 0.14", only: :dev, runtime: false},
-      {:cors_plug, "~> 2.0"},
+      {:cors_plug, "~> 2.0 or ~> 3.0"},
       {:req, "~> 0.5"}
     ]
   end

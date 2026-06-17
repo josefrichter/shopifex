@@ -57,7 +57,9 @@ defmodule ShopifexWeb.Routes do
       pipeline :shopify_proxy do
         plug(:fetch_session)
         plug(Shopifex.Plug.FetchFlash)
-        plug(Shopifex.Plug.ValidateHmac)
+        # App-proxy requests always carry a `timestamp`; require it so a signed
+        # proxy URL can't be replayed indefinitely.
+        plug(Shopifex.Plug.ValidateHmac, require_timestamp: true)
         plug(Shopifex.Plug.LoadProxyShop)
       end
 

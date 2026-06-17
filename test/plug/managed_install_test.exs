@@ -168,6 +168,29 @@ defmodule Shopifex.Plug.ManagedInstallTest do
     assert Shopifex.Plug.current_shop(conn).url == @shop
   end
 
+  test "new shop: a token-exchange response that omits scope persists scope: nil (not \"\")" do
+    parent = self()
+
+    Req.Test.stub(Shopifex.ReqStub, fn conn ->
+      if String.ends_with?(conn.request_path, "/admin/oauth/access_token") do
+        send(parent, :token_exchanged)
+        # Shopify may omit `scope` from the exchange response.
+        Req.Test.json(conn, Map.delete(token_exchange_response(), "scope"))
+      else
+        Req.Test.json(conn, %{"data" => %{"webhookSubscriptions" => %{"edges" => []}}})
+      end
+    end)
+
+    ManagedInstall.call(conn_with(%{"id_token" => token(), "shop" => @shop, "host" => "h"}), [])
+
+    assert_received :token_exchanged
+
+    shop = Shops.get_shop_by_url(@shop)
+    assert shop.access_token == "offline_access_token"
+    # The nullable scope field stays nil rather than being coerced to "".
+    assert shop.scope == nil
+  end
+
   test "new shop honors a custom insert_shop/1 override, whose return value flows into the session" do
     Application.put_env(
       :shopifex,

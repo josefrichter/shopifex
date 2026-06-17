@@ -340,17 +340,20 @@ In the controller the shop resolved from the signed `shop` param is available as
 `Shopifex.Plug.current_shop(conn)` (`nil` if that shop isn't in your database).
 `Shopifex.Plug.LoadProxyShop` does this right after `Shopifex.Plug.ValidateHmac`;
 pass `on_missing: :halt` to reject unknown shops with a `401` instead of passing
-through.
+through. The built-in `:shopify_proxy` pipeline passes
+`ValidateHmac, require_timestamp: true`, so a signed proxy URL without a
+`timestamp` is rejected rather than replayable forever.
 
 Storefront / proxy requests can legitimately lag past the default 90s HMAC
 `timestamp` tolerance. Relax it for the proxy pipeline **only** (without widening
-the admin-load replay window) with a per-plug option — build your own pipeline:
+the admin-load replay window) with a per-plug option — build your own pipeline.
+Keep `require_timestamp: true` so you don't lose the replay protection:
 
 ```elixir
 pipeline :shopify_proxy_relaxed do
   plug :fetch_session
   plug Shopifex.Plug.FetchFlash
-  plug Shopifex.Plug.ValidateHmac, timestamp_tolerance_seconds: 600
+  plug Shopifex.Plug.ValidateHmac, timestamp_tolerance_seconds: 600, require_timestamp: true
   plug Shopifex.Plug.LoadProxyShop
 end
 ```

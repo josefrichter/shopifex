@@ -7,8 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Fixed a cross-tenant grant bypass in `PaymentGuard`.** The default
+  `grant_for_guard/2` and `grants_for_shop/1` queries combined their filters with
+  `where` + `or_where`, which Ecto OR-ed against the *whole* clause — the
+  `remaining_usages > 0` branch dropped the `shop_id`/`guard` filters, so any
+  shop's metered grant could satisfy another shop's payment check (and the OR
+  branch could not use an index). The predicates are now AND-ed, with the `or`
+  confined to the two `remaining_usages` alternatives. Regression tests assert a
+  metered grant on one shop never leaks to another.
+- **App-proxy requests now require a `timestamp`.** The `:shopify_proxy` pipeline
+  passes `ValidateHmac, require_timestamp: true`, closing a replay window where a
+  signed proxy URL without a timestamp was valid forever. Admin-load / bulk-action
+  links (which may legitimately omit it) are unaffected.
+- **CSP `frame-ancestors` no longer interpolates an unvalidated shop host.**
+  `Shopifex.Plug.SetCSPHeader` now only adds the shop origin when the stored URL
+  is a bare hostname, so a malformed/tampered URL can't inject extra directives.
+- **Webhook dispatch fails closed on a missing/duplicate `x-shopify-topic`
+  header** (`400`) instead of raising a `MatchError` (`500`).
+
 ### Added
 
+- **`Shopifex.Plug.ValidateHmac, require_timestamp: true`** — a per-plug option
+  that rejects any signed request lacking a `timestamp` (default `false` keeps the
+  existing "missing timestamp is allowed" behavior for non-proxy flows).
 - **`Shopifex.Plug.LoadProxyShop`** — resolves the shop from a verified app-proxy
   request's signed `shop` param and exposes it via `Shopifex.Plug.current_shop/1`.
   Now included by default in the `:shopify_proxy` pipeline (after `ValidateHmac`),
@@ -37,6 +60,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Legacy OAuth `install`/`update` no longer call `String.to_atom/1`** on the
   token response (atom-exhaustion hardening) — known response keys are mapped via
   a fixed whitelist.
+- **`mix shopifex.gen.migration` now indexes `grants.shop_id`.** The generated
+  `grants` table only had a GIN index on `grants`; `grant_for_guard/2` filters by
+  `shop_id` on every guarded request, so a plain btree index is now emitted (the
+  migration generator gained an `:index` index type).
+- **`ShopifexWeb` docs/aliases dropped their v2 leftovers.** The moduledoc no
+  longer advertises `use ShopifexWeb, :view` (there was no `view/0` clause — it
+  raised `UndefinedFunctionError`), and `controller/0` no longer injects the dead
+  `alias _.Router.Helpers, as: Routes` (which also shadowed `ShopifexWeb.Routes`).
+
+### Changed
+
+- **`postgrex` is now a `:dev`/`:test`-only dependency.** The library never calls
+  Postgrex directly (only the test dummy repo does); downstream apps already bring
+  their own driver.
+- **`cors_plug` constraint widened to `~> 2.0 or ~> 3.0`** so downstream apps
+  aren't pinned to the 2.x line.
+- Removed orphaned `mix.lock` entries (`jsx`, `exjsx`, `meck`) left over from the
+  dropped `exvcr` test dependency.
 
 ## [3.0.0]
 

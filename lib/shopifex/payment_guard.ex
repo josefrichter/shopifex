@@ -81,11 +81,15 @@ defmodule Shopifex.PaymentGuard do
 
       @impl Shopifex.PaymentGuard
       def grant_for_guard(shop, guard) when is_struct(shop) do
+        # The `shop_id`/`guard` scoping and the usage predicate must all hold
+        # together. Mixing `where`/`or_where` here would OR the usage check
+        # against the *whole* clause, dropping the shop/guard filters and
+        # matching any shop's metered grant (cross-tenant leak). Keep the
+        # `or` strictly between the two `remaining_usages` alternatives.
         from(s in grant_schema(),
-          where: s.shop_id == ^shop.id,
-          where: ^guard in s.grants,
-          where: is_nil(s.remaining_usages),
-          or_where: s.remaining_usages > 0,
+          where:
+            s.shop_id == ^shop.id and ^guard in s.grants and
+              (is_nil(s.remaining_usages) or s.remaining_usages > 0),
           limit: 1
         )
         |> repo().one()
@@ -102,10 +106,12 @@ defmodule Shopifex.PaymentGuard do
 
       @impl Shopifex.PaymentGuard
       def grants_for_shop(shop) do
+        # Same OR-precedence hazard as `grant_for_guard/2`: the `shop_id` filter
+        # must AND with the usage predicate, never OR against it.
         from(s in grant_schema(),
-          where: s.shop_id == ^shop.id,
-          where: is_nil(s.remaining_usages),
-          or_where: s.remaining_usages > 0
+          where:
+            s.shop_id == ^shop.id and
+              (is_nil(s.remaining_usages) or s.remaining_usages > 0)
         )
         |> repo().all()
       end

@@ -78,7 +78,7 @@ creates missing), `get_current_webhooks/1`, `delete_webhook/2`. Topics come from
 `config :shopifex, :webhook_topics` (REST-style strings, e.g. `"orders/create"`). Configured
 on first install and reconciled on every re-exchange (self-healing). Webhook HMAC: Base64,
 constant-time, case-sensitive (`Shopifex.Plug.ShopifyWebhook`). Unknown shop → 200 (stops
-retries); bad HMAC → 401.
+retries); bad HMAC → 401; missing/duplicate `x-shopify-topic` header → 400 (fails closed).
 
 For slow handlers, enqueue Oban and return 200 immediately (avoid Shopify's webhook timeout).
 
@@ -94,7 +94,8 @@ For slow handlers, enqueue Oban and return 200 immediately (avoid Shopify's webh
   `/payment/select-plan` and reads it at `/payment/complete`. The default
   `Shopifex.RedirectAfterAgent` keeps that in a node-local `Agent`, so on multi-node
   deploys (Fly.io, …) the confirmation can land on a different node → cache miss →
-  `complete_payment/2` returns `{:error, :forbidden}` and **no Grant is created**.
+  `complete_payment/2` responds **403** (a `Plug.Conn`, logged at `:error`) and **no
+  Grant is created**.
   Use the shipped, DB-backed store instead:
   `config :shopifex, :redirect_after_agent, Shopifex.RedirectAfter.Ecto` (table
   `shopifex_charge_redirects`: `charge_id` bigint PK, `redirect_after` text,
@@ -140,7 +141,10 @@ A nil/empty stored scope is treated as no scopes (raises, doesn't crash).
 ## Security
 - HMAC compared in constant time (`Plug.Crypto.secure_compare/2`) everywhere; computed
   HMACs never logged. Webhook HMACs Base64 (case-sensitive); query/app-proxy HMACs hex,
-  params sorted alphabetically, with a 90s `timestamp` tolerance.
+  params sorted alphabetically, with a 90s `timestamp` tolerance. The `:shopify_proxy`
+  pipeline passes `ValidateHmac, require_timestamp: true`, so app-proxy requests without a
+  `timestamp` are rejected (no indefinitely-replayable signed URLs); admin-load / bulk-action
+  links still allow a missing timestamp.
 - **Secret rotation:** set `config :shopifex, :old_secret` so both the current and previous
   secret are accepted while you roll the credential.
 - `ShopifexWeb.CacheBodyReader` must be the `Plug.Parsers` `body_reader` (raw body for HMAC).

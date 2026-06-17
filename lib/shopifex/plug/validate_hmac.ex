@@ -11,7 +11,18 @@ defmodule Shopifex.Plug.ValidateHmac do
       for admin-load and app-proxy flows) it must be within
       `config :shopifex, :hmac_timestamp_tolerance_seconds` (default `90`) of now,
       closing the replay window. (A request that carries no `timestamp` skips the
-      freshness check.)
+      freshness check, unless `:require_timestamp` is set — see below.)
+
+  ## Requiring a timestamp
+
+  Some signed flows (e.g. bulk-action links) legitimately omit `timestamp`, so by
+  default a missing timestamp is allowed. App-proxy requests, however, *always*
+  carry one, and without it the signed URL is replayable forever. Pass
+  `require_timestamp: true` to reject any request that lacks a `timestamp`:
+
+      plug Shopifex.Plug.ValidateHmac, require_timestamp: true
+
+  The `:shopify_proxy` pipeline sets this by default.
 
   ## Per-pipeline tolerance
 
@@ -66,7 +77,11 @@ defmodule Shopifex.Plug.ValidateHmac do
   defp validate_timestamp(conn, options) do
     case conn.query_params["timestamp"] do
       nil ->
-        :ok
+        if Keyword.get(options, :require_timestamp, false) do
+          {:error, "missing timestamp"}
+        else
+          :ok
+        end
 
       timestamp ->
         with {seconds, _} <- Integer.parse(to_string(timestamp)),

@@ -43,9 +43,23 @@ defmodule ShopifexWeb.WebhookController do
     quote do
       plug(:assign_shopify_topic)
 
+      # Every genuine Shopify webhook carries exactly one `x-shopify-topic`
+      # header, but pattern-matching `[topic]` raised a `MatchError` (→ 500) on a
+      # missing or duplicated header. Fail closed with a 400 instead so a
+      # malformed request can't crash the endpoint.
       defp assign_shopify_topic(conn, _) do
-        [topic] = Plug.Conn.get_req_header(conn, "x-shopify-topic")
-        Plug.Conn.assign(conn, :shopify_topic, topic)
+        case Plug.Conn.get_req_header(conn, "x-shopify-topic") do
+          [topic] ->
+            Plug.Conn.assign(conn, :shopify_topic, topic)
+
+          _ ->
+            require Logger
+            Logger.info("Rejecting webhook with missing or duplicate x-shopify-topic header")
+
+            conn
+            |> Plug.Conn.send_resp(400, "missing x-shopify-topic header")
+            |> Plug.Conn.halt()
+        end
       end
 
       def action(conn, _),

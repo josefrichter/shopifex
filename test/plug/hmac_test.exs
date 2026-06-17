@@ -100,6 +100,25 @@ defmodule Shopifex.Plug.HmacTest do
       refute ValidateHmac.call(get_conn(params), []).halted
     end
 
+    test "require_timestamp: true rejects an otherwise-valid request with no timestamp" do
+      base = %{"shop" => "x.myshopify.com", "code" => "abc"}
+      params = Map.put(base, "hmac", query_hmac(base, "&"))
+
+      opts = ValidateHmac.init(require_timestamp: true)
+      conn = ValidateHmac.call(get_conn(params), opts)
+
+      assert conn.halted
+      assert conn.status == 401
+    end
+
+    test "require_timestamp: true still accepts a request that carries a fresh timestamp" do
+      base = %{"shop" => "x.myshopify.com", "timestamp" => to_string(System.system_time(:second))}
+      params = Map.put(base, "hmac", query_hmac(base, "&"))
+
+      opts = ValidateHmac.init(require_timestamp: true)
+      refute ValidateHmac.call(get_conn(params), opts).halted
+    end
+
     test "rejects a non-integer timestamp even when the signature is valid" do
       base = %{"shop" => "x.myshopify.com", "timestamp" => "not-a-number"}
       params = Map.put(base, "hmac", query_hmac(base, "&"))
