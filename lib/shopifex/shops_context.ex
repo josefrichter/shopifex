@@ -32,39 +32,27 @@ defmodule Shopifex.ShopsContext do
         Map.get(shop, get_scope_field())
       end
 
-      defp get_url_field() do
-        # TODO: dont check for defaults in v3.0
-        if Keyword.has_key?(shop_schema().__info__(:functions), :shopifex_url_field) do
-          shop_schema().shopifex_url_field()
-        else
-          :url
-        end
-      end
+      defp get_url_field(), do: shopifex_schema_opt(:shopifex_url_field, :url)
 
-      def get_scope_field() do
-        # TODO: dont check for defaults in v3.0
-        if Keyword.has_key?(shop_schema().__info__(:functions), :shopifex_scope_field) do
-          shop_schema().shopifex_scope_field()
-        else
-          :scope
-        end
-      end
+      def get_scope_field(), do: shopifex_schema_opt(:shopifex_scope_field, :scope)
 
-      defp get_filters() do
-        # TODO: dont check for defaults in v3.0
-        if Keyword.has_key?(shop_schema().__info__(:functions), :shopifex_filters) do
-          shop_schema().shopifex_filters()
-        else
-          []
-        end
-      end
+      defp get_filters(), do: shopifex_schema_opt(:shopifex_filters, [])
 
-      defp get_preloads() do
-        # TODO: dont check for defaults in v3.0
-        if Keyword.has_key?(shop_schema().__info__(:functions), :shopifex_preloads) do
-          shop_schema().shopifex_preloads()
+      defp get_preloads(), do: shopifex_schema_opt(:shopifex_preloads, [])
+
+      # A shop schema can use the default field names (`:url`/`:scope`, what
+      # `mix shopifex.install` generates) or opt into custom names/filters/preloads
+      # via `use Shopifex.Shop`, which injects `shopifex_*_field/0` accessors. Both
+      # are supported: use the accessor when the schema defines it, otherwise fall
+      # back to the documented default. `Code.ensure_loaded?/1` keeps this correct
+      # even if the schema module hasn't been loaded yet.
+      defp shopifex_schema_opt(fun, default) do
+        schema = shop_schema()
+
+        if Code.ensure_loaded?(schema) and function_exported?(schema, fun, 0) do
+          apply(schema, fun, [])
         else
-          []
+          default
         end
       end
 
