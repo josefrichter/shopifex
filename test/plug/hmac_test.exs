@@ -79,6 +79,20 @@ defmodule Shopifex.Plug.HmacTest do
       refute ValidateHmac.call(get_conn(params), []).halted
     end
 
+    test "a per-plug timestamp_tolerance_seconds overrides the global default" do
+      # 200s old: stale under the default 90s window, fresh under a 600s per-plug one.
+      old = System.system_time(:second) - 200
+      base = %{"shop" => "x.myshopify.com", "timestamp" => to_string(old)}
+      params = Map.put(base, "hmac", query_hmac(base, "&"))
+
+      # Rejected at the default tolerance...
+      assert ValidateHmac.call(get_conn(params), []).halted
+
+      # ...accepted when the pipeline opts into a larger tolerance.
+      opts = ValidateHmac.init(timestamp_tolerance_seconds: 600)
+      refute ValidateHmac.call(get_conn(params), opts).halted
+    end
+
     test "accepts a validly-signed request that omits the timestamp (e.g. bulk-action links)" do
       base = %{"shop" => "x.myshopify.com", "code" => "abc"}
       params = Map.put(base, "hmac", query_hmac(base, "&"))

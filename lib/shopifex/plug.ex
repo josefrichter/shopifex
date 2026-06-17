@@ -8,7 +8,10 @@ defmodule Shopifex.Plug do
   @doc """
   Get current request shop resource for give `conn`.
 
-  Available in all requests which have passed through a `:shopify_*` pipeline.
+  Available in requests that passed through a `:shopify_session`,
+  `:managed_install`, or `:shopify_proxy` pipeline. (For `:shopify_proxy`,
+  `Shopifex.Plug.LoadProxyShop` resolves it from the signed `shop` param; it is
+  `nil` when that shop isn't found.)
 
   ## Examples:
 

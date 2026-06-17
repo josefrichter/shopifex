@@ -86,13 +86,26 @@ defmodule ShopifexWeb.AuthController do
       require Logger
 
       @impl ShopifexWeb.AuthController
-      def auth(conn, _) do
+      def auth(conn, params) do
         path_prefix = Application.get_env(:shopifex, :path_prefix, "")
 
-        # The session is already established by the `:shopify_session` pipeline
-        # (via the Shopify `id_token`). Embedded apps receive a fresh id_token on
-        # every page load, so no app-issued token needs to be carried here.
-        redirect(conn, to: path_prefix <> "/")
+        # A server 302 is a top-level iframe navigation, so — unlike App Bridge
+        # `fetch`es — it does NOT inherit the `id_token`, and third-party cookies
+        # are blocked, so identity is not carried implicitly to the landing route.
+        # Forward the embedded-context params: per Shopify's docs App Bridge needs
+        # `shop` and `host` to (re)initialize and acquire a session token on the
+        # landing page, and forwarding the still-valid `id_token` lets that route's
+        # `:shopify_session` authenticate this immediate hop without a bounce.
+        # (Whatever route you redirect to must sit behind a `:shopify_session`
+        # pipeline for this to work.)
+        query =
+          params
+          |> Map.take(["shop", "host", "embedded", "locale", "id_token"])
+          |> URI.encode_query()
+
+        to = path_prefix <> "/" <> if(query == "", do: "", else: "?" <> query)
+
+        redirect(conn, to: to)
       end
 
       def initialize_installation(conn, %{"shop" => shop_url} = params) do
@@ -157,7 +170,7 @@ defmodule ShopifexWeb.AuthController do
           {:ok, %{status: 200, body: body}} ->
             params =
               body
-              |> Map.new(fn {k, v} -> {String.to_atom(k), v} end)
+              |> atomize_oauth_response()
               |> Map.put(:url, shop_url)
 
             params = Map.put(params, Shopifex.Shops.get_scope_field(), params[:scope])
@@ -194,9 +207,7 @@ defmodule ShopifexWeb.AuthController do
                }
              ) do
           {:ok, %{status: 200, body: body}} ->
-            params =
-              body
-              |> Map.new(fn {k, v} -> {String.to_atom(k), v} end)
+            params = atomize_oauth_response(body)
 
             params = Map.put(params, Shopifex.Shops.get_scope_field(), params[:scope])
 
@@ -218,6 +229,24 @@ defmodule ShopifexWeb.AuthController do
 
       defp build_external_url(path, query_params \\ %{}) do
         Path.join(path) <> "?" <> URI.encode_query(query_params)
+      end
+
+      # Map the known keys from Shopify's OAuth / token-exchange response to
+      # atoms via a fixed whitelist — never `String.to_atom/1` on external input
+      # (atom-exhaustion DoS). Unknown keys are dropped; the shop changeset only
+      # casts permitted fields, so this is behaviour-preserving for persistence.
+      defp atomize_oauth_response(body) do
+        atoms = %{
+          "access_token" => :access_token,
+          "scope" => :scope,
+          "expires_in" => :expires_in,
+          "refresh_token" => :refresh_token,
+          "refresh_token_expires_in" => :refresh_token_expires_in
+        }
+
+        body
+        |> Map.take(Map.keys(atoms))
+        |> Map.new(fn {k, v} -> {Map.fetch!(atoms, k), v} end)
       end
     end
   end

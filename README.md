@@ -173,6 +173,16 @@ config :shopifex,
 #   reinstall_uri: "https://myapp.ngrok.io/auth/update",
 ```
 
+> **Webhooks — choose one mechanism, not both.** `:webhook_topics` registers
+> webhook subscriptions imperatively via the GraphQL Admin API, on install and
+> on every token re-exchange. If you instead declare webhooks declaratively in
+> `shopify.app.toml` (`[webhooks]`, Shopify's modern recommended path), **set
+> `webhook_topics: []`**. Otherwise Shopifex reconciles against Shopify's
+> `webhookSubscriptions` query — which returns only shop-scoped (API-created)
+> subscriptions, *not* your TOML/app-config ones — so each TOML topic looks
+> unregistered and gets a duplicate API subscription, and the store can receive
+> every event twice.
+
 Update your `endpoint.ex` to include the custom body parser. This is necessary for HMAC validation to work.
 
 ```elixir
@@ -300,13 +310,50 @@ link to another `:shopify_session` route just works:
 ```
 
 `Shopifex.Plug.current_shop(conn)` is available in any request that passes through
-a `:shopify_*` pipeline. For LiveView, use the `shopifex_live_session` macro below.
+a `:shopify_session`, `:managed_install`, or `:shopify_proxy` pipeline. (For
+`:shopify_proxy`, `Shopifex.Plug.LoadProxyShop` resolves the shop from the signed
+`shop` param once the HMAC is verified; it is `nil` if that shop isn't in your
+database — see [App proxy](#app-proxy).) For LiveView, use the
+`shopifex_live_session` macro below.
 
 > **Legacy (v2) token-in-URL pattern.** Older apps threaded
 > `Shopifex.Plug.session_token(conn)` through a `token` query parameter on every
 > link/form. This still works (`session_token/1` reads `id_token`, `token`, and the
 > `Bearer` header), but it is no longer necessary for managed-install apps and is
 > kept only for backward compatibility.
+
+## App proxy
+
+[App proxy](https://shopify.dev/docs/apps/build/online-store/display-dynamic-data)
+requests are signed with a `signature` param (not the admin `hmac`). The
+`:shopify_proxy` pipeline verifies that signature and loads the shop:
+
+```elixir
+scope "/proxy", MyAppWeb do
+  pipe_through [:shopify_proxy]
+
+  get "/", ProxyController, :show
+end
+```
+
+In the controller the shop resolved from the signed `shop` param is available as
+`Shopifex.Plug.current_shop(conn)` (`nil` if that shop isn't in your database).
+`Shopifex.Plug.LoadProxyShop` does this right after `Shopifex.Plug.ValidateHmac`;
+pass `on_missing: :halt` to reject unknown shops with a `401` instead of passing
+through.
+
+Storefront / proxy requests can legitimately lag past the default 90s HMAC
+`timestamp` tolerance. Relax it for the proxy pipeline **only** (without widening
+the admin-load replay window) with a per-plug option — build your own pipeline:
+
+```elixir
+pipeline :shopify_proxy_relaxed do
+  plug :fetch_session
+  plug Shopifex.Plug.FetchFlash
+  plug Shopifex.Plug.ValidateHmac, timestamp_tolerance_seconds: 600
+  plug Shopifex.Plug.LoadProxyShop
+end
+```
 
 ## Using LiveView in your embedded app
 There are two special considerations to using LiveView in your embedded app.

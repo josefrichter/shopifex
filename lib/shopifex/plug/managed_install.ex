@@ -208,9 +208,12 @@ defmodule Shopifex.Plug.ManagedInstall do
       refresh_token: body["refresh_token"],
       refresh_token_expires_at: expires_at(now, body["refresh_token_expires_in"])
     }
-    # Mirror the OAuth path (Shopifex.Auth): never persist a nil scope, so
-    # downstream scope checks stay well-defined under the nullable-scope schema.
-    |> Map.put(scope_field, body["scope"] || "")
+    # `scope` is nullable and may be absent from the exchange response — persist
+    # what Shopify returned (possibly nil). A `|| ""` fallback here is dead on
+    # arrival: a standard `cast/3` casts `""` back to nil via Ecto's default
+    # `:empty_values`. The one library consumer, `Shopifex.Plug.EnsureScopes`,
+    # reads it as `get_scope(shop) || ""`, so a nil scope is well-defined.
+    |> Map.put(scope_field, body["scope"])
   end
 
   # First install: persist through the configurable managed-install callbacks so
@@ -230,10 +233,21 @@ defmodule Shopifex.Plug.ManagedInstall do
   # install registration or topics added to `:webhook_topics` later; runs at the
   # ≤50-minute re-exchange cadence, never on the hot per-load path), and run the
   # every-exchange hook (NOT the first-install hooks).
+  #
+  # `config :shopifex, :configure_webhooks_on_exchange?` (default `true`) gates
+  # only this recurring reconcile — first install always registers. Set it to
+  # `false` to skip the self-heal/query cost on every re-exchange (e.g. apps that
+  # register once and never change topics). To disable Shopifex webhook
+  # registration entirely (e.g. TOML-managed webhooks), set `:webhook_topics` to
+  # `[]` instead.
   defp persist_shop(_new? = false, shop, attrs) do
     callbacks = Shopifex.ManagedInstall.Callbacks.module()
     shop = Shopifex.Shops.update_shop(shop, attrs)
-    Shopifex.Shops.configure_webhooks(shop)
+
+    if Application.get_env(:shopifex, :configure_webhooks_on_exchange?, true) do
+      Shopifex.Shops.configure_webhooks(shop)
+    end
+
     callbacks.after_exchange(shop, false)
     shop
   end

@@ -275,14 +275,17 @@ defmodule ShopifexWeb.PaymentController do
                 "config :shopifex, :redirect_after_agent (e.g. Shopifex.RedirectAfter.Ecto)."
             )
 
-            {:error, :forbidden}
+            # Respond with a Plug.Conn directly. A controller action MUST return a
+            # conn; returning `{:error, :forbidden}` raised a 500 unless the app
+            # had wired an `action_fallback`, which this controller never required.
+            send_resp(conn, 403, "Could not verify this payment confirmation.")
 
           redirect_after ->
             redirect_after = URI.decode_www_form(redirect_after)
 
             case Shopifex.Shops.get_shop_by_url(shop_url) do
               nil ->
-                {:error, :forbidden}
+                send_resp(conn, 403, "Could not verify this payment confirmation.")
 
               shop ->
                 payment_guard = Application.fetch_env!(:shopifex, :payment_guard)

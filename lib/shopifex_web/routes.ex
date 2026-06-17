@@ -58,6 +58,7 @@ defmodule ShopifexWeb.Routes do
         plug(:fetch_session)
         plug(Shopifex.Plug.FetchFlash)
         plug(Shopifex.Plug.ValidateHmac)
+        plug(Shopifex.Plug.LoadProxyShop)
       end
 
       pipeline :shopify_admin_link do

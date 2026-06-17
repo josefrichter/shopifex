@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Shopifex.Plug.LoadProxyShop`** — resolves the shop from a verified app-proxy
+  request's signed `shop` param and exposes it via `Shopifex.Plug.current_shop/1`.
+  Now included by default in the `:shopify_proxy` pipeline (after `ValidateHmac`),
+  so proxy controllers get `current_shop` without a bespoke plug. Pass
+  `on_missing: :halt` to reject unknown shops with `401` (default `:pass` is
+  non-breaking — `current_shop` is simply `nil`).
+- **Per-pipeline HMAC timestamp tolerance.** `Shopifex.Plug.ValidateHmac` accepts
+  a `timestamp_tolerance_seconds` plug option that overrides the global
+  `config :shopifex, :hmac_timestamp_tolerance_seconds`, so an app-proxy pipeline
+  can allow more clock/lag drift without widening the admin-load replay window.
+- **`config :shopifex, :configure_webhooks_on_exchange?`** (default `true`) — set
+  `false` to skip the idempotent webhook reconcile on every token re-exchange
+  (first install still registers). To disable Shopifex webhook registration
+  entirely (e.g. TOML-managed webhooks), set `:webhook_topics` to `[]`.
+
+### Fixed
+
+- **`complete_payment/2` no longer 500s on a redirect-cache miss.** It now
+  responds `403` (a `Plug.Conn`) instead of returning a bare `{:error, :forbidden}`
+  tuple, which raised unless the app had wired an `action_fallback`.
+- **Managed-install `auth/2` redirect carries embedded-context params.** The
+  redirect to the app root now forwards `shop`/`host`/`id_token` so App Bridge can
+  re-initialize on the landing page (a server 302 doesn't inherit them and
+  third-party cookies are blocked), and the landing route's `:shopify_session` can
+  authenticate the hop.
+- **Legacy OAuth `install`/`update` no longer call `String.to_atom/1`** on the
+  token response (atom-exhaustion hardening) — known response keys are mapped via
+  a fixed whitelist.
+
 ## [3.0.0]
 
 Modernization release: Shopify 2026 compliance, a Guardian-free embedded auth

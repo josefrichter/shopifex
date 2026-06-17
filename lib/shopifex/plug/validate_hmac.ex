@@ -10,13 +10,21 @@ defmodule Shopifex.Plug.ValidateHmac do
     * When the request includes a `timestamp` parameter (Shopify always sends one
       for admin-load and app-proxy flows) it must be within
       `config :shopifex, :hmac_timestamp_tolerance_seconds` (default `90`) of now,
-      closing the replay window. App-proxy/storefront requests that can legitimately
-      lag past 90s need a larger tolerance. (A request that carries no `timestamp`
-      skips the freshness check.)
+      closing the replay window. (A request that carries no `timestamp` skips the
+      freshness check.)
+
+  ## Per-pipeline tolerance
+
+  The `config :shopifex, :hmac_timestamp_tolerance_seconds` default is global. App
+  proxy / storefront requests can legitimately lag past 90s, but widening the
+  global value also widens the admin-load replay window. Pass a `plug` option to
+  relax the tolerance for one pipeline only, without touching the global default:
+
+      plug Shopifex.Plug.ValidateHmac, timestamp_tolerance_seconds: 600
 
   This plug **only verifies the signature** — it does not load the shop into
-  `conn.assigns`. App-proxy consumers that need `current_shop` should load it in a
-  downstream plug (e.g. by `Shopifex.Shops.get_shop_by_url(conn.params["shop"])`).
+  `conn.assigns`. The `:shopify_proxy` pipeline pairs it with
+  `Shopifex.Plug.LoadProxyShop` so app-proxy consumers get `current_shop/1`.
   """
   import Plug.Conn
   require Logger
@@ -25,8 +33,8 @@ defmodule Shopifex.Plug.ValidateHmac do
 
   def init(options), do: options
 
-  def call(conn, _) do
-    with :ok <- validate_timestamp(conn),
+  def call(conn, options) do
+    with :ok <- validate_timestamp(conn, options),
          :ok <- validate_signature(conn) do
       conn
     else
@@ -55,14 +63,14 @@ defmodule Shopifex.Plug.ValidateHmac do
   # Read from `query_params` — the values the HMAC actually covers — not the
   # merged `params`, so an unsigned POST body `timestamp` can't shadow the signed
   # query value and defeat the replay window.
-  defp validate_timestamp(conn) do
+  defp validate_timestamp(conn, options) do
     case conn.query_params["timestamp"] do
       nil ->
         :ok
 
       timestamp ->
         with {seconds, _} <- Integer.parse(to_string(timestamp)),
-             true <- abs(System.system_time(:second) - seconds) <= tolerance_seconds() do
+             true <- abs(System.system_time(:second) - seconds) <= tolerance_seconds(options) do
           :ok
         else
           _ -> {:error, "stale timestamp"}
@@ -70,7 +78,15 @@ defmodule Shopifex.Plug.ValidateHmac do
     end
   end
 
-  defp tolerance_seconds do
-    Application.get_env(:shopifex, :hmac_timestamp_tolerance_seconds, @default_tolerance_seconds)
+  # A per-plug `:timestamp_tolerance_seconds` option (set in a pipeline) overrides
+  # the global config, so one pipeline (e.g. app proxy) can allow more lag without
+  # widening the admin-load replay window.
+  defp tolerance_seconds(options) do
+    Keyword.get(options, :timestamp_tolerance_seconds) ||
+      Application.get_env(
+        :shopifex,
+        :hmac_timestamp_tolerance_seconds,
+        @default_tolerance_seconds
+      )
   end
 end

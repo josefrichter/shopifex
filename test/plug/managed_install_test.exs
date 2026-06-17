@@ -160,6 +160,7 @@ defmodule Shopifex.Plug.ManagedInstallTest do
 
     shop = Shops.get_shop_by_url(@shop)
     assert shop.access_token == "offline_access_token"
+    assert shop.scope == "read_orders"
     assert %DateTime{} = shop.token_expires_at
     assert shop.refresh_token == "offline_refresh_token"
     assert %DateTime{} = shop.refresh_token_expires_at
@@ -241,6 +242,33 @@ defmodule Shopifex.Plug.ManagedInstallTest do
     refreshed = Shops.get_shop_by_url(@shop)
     assert refreshed.access_token == "offline_access_token"
     assert refreshed.refresh_token == "offline_refresh_token"
+    assert Shopifex.Plug.current_shop(conn).access_token == "offline_access_token"
+  end
+
+  test "configure_webhooks_on_exchange?: false skips the reconcile on re-exchange (still re-exchanges the token)" do
+    Application.put_env(:shopifex, :configure_webhooks_on_exchange?, false)
+    on_exit(fn -> Application.delete_env(:shopifex, :configure_webhooks_on_exchange?) end)
+
+    Shops.create_shop(%{
+      url: @shop,
+      scope: "read_orders",
+      access_token: "stale_token",
+      token_expires_at:
+        DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second),
+      refresh_token: "stale_refresh"
+    })
+
+    stub_shopify()
+
+    conn =
+      ManagedInstall.call(conn_with(%{"id_token" => token(), "shop" => @shop, "host" => "h"}), [])
+
+    # The token is still re-exchanged and the every-exchange hook still runs...
+    assert_received :token_exchanged
+    assert_received {:after_exchange, false}
+    # ...but the webhook reconcile is skipped.
+    refute_received :webhook_created
+
     assert Shopifex.Plug.current_shop(conn).access_token == "offline_access_token"
   end
 

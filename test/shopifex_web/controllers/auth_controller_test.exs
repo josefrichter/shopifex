@@ -97,8 +97,15 @@ defmodule ShopifexWeb.AuthControllerTest do
 
       conn = get(conn, Routes.auth_path(@endpoint, :auth) <> "?#{query}")
 
-      # auth/2 redirects to the app root once the session is established.
-      assert redirected_to(conn) == "/"
+      # auth/2 redirects to the app root, carrying the embedded-context params
+      # (shop/host/id_token) so App Bridge can re-initialize on the landing page
+      # and the landing route's :shopify_session can authenticate the hop.
+      location = redirected_to(conn)
+      assert %URI{path: "/", query: redirect_query} = URI.parse(location)
+      redirect_params = URI.decode_query(redirect_query)
+      assert redirect_params["shop"] == shop_url
+      assert redirect_params["host"] == "aG9zdA=="
+      assert redirect_params["id_token"] == id_token
 
       # Webhooks are configured on first install, end-to-end through the pipeline.
       assert_received :webhook_created

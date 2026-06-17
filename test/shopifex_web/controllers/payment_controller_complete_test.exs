@@ -27,25 +27,47 @@ defmodule ShopifexWeb.PaymentControllerCompleteTest do
   end
 
   describe "redirect-cache miss" do
-    test "logs an actionable error and returns forbidden instead of failing silently", %{
+    test "logs an actionable error and responds with a 403 Conn (not the bare tuple)", %{
       conn: conn,
       shop: shop,
       plan: plan
     } do
       # No redirect-after entry was ever stored for this charge (the multi-node
       # symptom: the confirmation redirect hit a node that never ran select_plan).
-      log =
-        capture_log(fn ->
-          assert {:error, :forbidden} =
-                   ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
-                     "charge_id" => "9999999",
-                     "plan_id" => to_string(plan.id),
-                     "shop" => shop.url
-                   })
+      {result, log} =
+        with_log(fn ->
+          ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+            "charge_id" => "9999999",
+            "plan_id" => to_string(plan.id),
+            "shop" => shop.url
+          })
         end)
 
+      # A controller action MUST return a Plug.Conn — returning {:error, :forbidden}
+      # raised a 500. Assert the response shape, not the old tuple.
+      assert %Plug.Conn{status: 403} = result
       assert log =~ "no redirect-after entry"
       assert log =~ "redirect_after_agent"
+    end
+
+    test "GET /payment/complete with an unknown charge_id returns 403, never a raised 500", %{
+      conn: conn,
+      shop: shop,
+      plan: plan
+    } do
+      # Drive it through the real router/action pipeline — the exact path the bug
+      # broke (a non-Conn return raised before any response). The earlier
+      # function-level test bypassed this and so never caught the 500.
+      {conn, _log} =
+        with_log(fn ->
+          get(conn, "/payment/complete", %{
+            "charge_id" => "9999999",
+            "plan_id" => to_string(plan.id),
+            "shop" => shop.url
+          })
+        end)
+
+      assert conn.status == 403
     end
   end
 
