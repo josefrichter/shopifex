@@ -24,9 +24,9 @@ defmodule Shopifex.API do
 
   ## API version
 
-  The Admin API version is configurable and defaults to `"2026-04"`:
+  The Admin API version is configurable and defaults to `"2026-07"`:
 
-      config :shopifex, :api_version, "2026-04"
+      config :shopifex, :api_version, "2026-07"
 
   `api_version/0` is the single source of truth — webhook and billing code
   read it too.
@@ -34,7 +34,7 @@ defmodule Shopifex.API do
 
   alias Shopifex.Auth
 
-  @default_api_version "2026-04"
+  @default_api_version "2026-07"
 
   @doc """
   Run a GraphQL query/mutation against the shop's Admin API.

@@ -118,6 +118,7 @@ The parity matrix should explicitly compare Shopifex against:
 ## Assumptions
 
 - 3.0 is optimized for new embedded Shopify apps; legacy OAuth remains only for compatibility.
-- API version stays `2026-04` for now.
+- API version was subsequently validated and advanced to `2026-07` during the
+  token-refresh hardening pass.
 - The implementation should prefer Shopify official JS/Ruby behavior where this library lacks a strong Elixir-specific reason to differ.
 - No public module namespace rename is planned for this pass.

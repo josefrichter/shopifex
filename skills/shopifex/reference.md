@@ -24,7 +24,9 @@ Flow on `/auth` (pipeline `[:shopifex_browser, :managed_install, :shopify_sessio
 
 Background/API freshness: `Shopifex.Auth.ensure_fresh_token/1` proactively refreshes within
 a 5-min window; `Shopifex.API.graphql/3` reactively refreshes once on a 401 and retries.
-Refresh is serialized cross-node with a `SELECT … FOR UPDATE` row lock.
+Refresh is serialized cross-node with the `shopifex_token_refresh_leases` table. The
+Shopify request runs without a transaction or shop-row lock; a short final transaction
+re-checks token fields before persisting.
 
 `Shopifex.Plug.session_token(conn)` reads the token from `id_token` / `token` query params
 or the `Authorization: Bearer` header.
@@ -51,7 +53,7 @@ apply only to the **OAuth** controller flow, not managed install.
 Returns the unwrapped `data` map on success. On HTTP 200 **with** a GraphQL `errors` array
 it returns `{:error, errors}` (errors take precedence — a partial `data` is dropped). On a
 401 it refreshes once and retries. API version: `config :shopifex, :api_version` (default
-`"2026-04"`), single source of truth.
+`"2026-07"`), single source of truth.
 
 Example context function:
 ```elixir
@@ -128,7 +130,7 @@ A nil/empty stored scope is treated as no scopes (raises, doesn't crash).
 | `api_key`, `secret` | Shopify app credentials |
 | `old_secret` | accepted during a secret rotation (HMAC + token verify) |
 | `scopes` | EnsureScopes check (mirror the TOML) |
-| `api_version` | Admin API version (default `2026-04`) |
+| `api_version` | Admin API version (default `2026-07`) |
 | `webhook_topics`, `webhook_uri` | webhook subscription |
 | `managed_install_callbacks` | `insert_shop/1` + `after_install/1` hooks |
 | `payment_guard`, `plan_schema`, `grant_schema`, `payment_redirect_uri` | billing |
@@ -136,6 +138,9 @@ A nil/empty stored scope is treated as no scopes (raises, doesn't crash).
 | `hmac_timestamp_tolerance_seconds` | query-HMAC freshness window (default 90) |
 | `ensure_scopes_on_missing` | `:raise` (default) or `:redirect` |
 | `req_options` | (test) inject `plug: {Req.Test, Stub}` |
+| `token_refresh_lease_ttl_ms` | crashed refresh-owner recovery window (default 120,000) |
+| `token_refresh_wait_timeout_ms` | maximum wait for another refresh (default 15,000) |
+| `token_refresh_poll_interval_ms` | refresh-state poll interval (default 100) |
 | `default_locale` | gettext fallback |
 
 ## Security

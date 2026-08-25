@@ -149,6 +149,21 @@ mix ecto.migrate
 The four token columns are nullable — legacy/non-expiring installs round-trip with
 `nil` expiry values. (`mix shopifex.install` generates this schema for you.)
 
+Background refresh also needs a short-lived, cross-node lease table. New
+`mix shopifex.install` migrations include it. When upgrading an existing app,
+run `mix ecto.gen.migration create_shopifex_token_refresh_leases`, then add:
+
+```elixir
+create table(:shopifex_token_refresh_leases, primary_key: false) do
+  add :shop_url, :string, primary_key: true
+  add :owner, :string, null: false
+  add :lease_expires_at, :utc_datetime_usec, null: false
+end
+```
+
+The Shopify token request runs outside a database transaction; only a short
+compare-and-persist step locks the shop row after the response arrives.
+
 Add the `:shopifex` config settings to your `config.ex`. More config details [here](https://hexdocs.pm/shopifex)
 
 ```elixir
@@ -161,7 +176,7 @@ config :shopifex,
   scopes: "read_inventory,write_inventory,read_products,write_products,read_orders",
   api_key: "shopifyapikey123",
   secret: "shopifyapisecret456",
-  api_version: "2026-04", # Admin GraphQL API version used by Shopifex.API
+  api_version: "2026-07", # Admin GraphQL API version used by Shopifex.API
   webhook_topics: ["app/uninstalled"], # These are automatically subscribed on a store upon install
   shops_context_client: Shopifex.ShopsContextClient # Optional. Overridable context module which Shopifex uses to fetch and manage common app state
 

@@ -14,6 +14,20 @@ defmodule Shopifex.APITest do
     {:ok, shop: shop}
   end
 
+  test "defaults to the 2026-07 Admin API version" do
+    previous = Application.fetch_env(:shopifex, :api_version)
+    Application.delete_env(:shopifex, :api_version)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:shopifex, :api_version, value)
+        :error -> Application.delete_env(:shopifex, :api_version)
+      end
+    end)
+
+    assert API.api_version() == "2026-07"
+  end
+
   test "returns {:ok, data} on a successful GraphQL response", %{shop: shop} do
     Req.Test.stub(Shopifex.ReqStub, fn conn ->
       Req.Test.json(conn, %{"data" => %{"shop" => %{"name" => "Test Shop"}}})

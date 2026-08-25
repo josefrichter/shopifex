@@ -137,8 +137,9 @@ Deleted Stock Sorted's bespoke `InventoryPool.Auth` and
 `InventoryPool.ShopifySessionToken` and repointed their (substantial) existing
 test suites at `Shopifex.Auth` / `Shopifex.SessionToken` as conformance tests —
 **they passed unchanged**, including:
-- the one-time-use refresh_token **`SELECT FOR UPDATE` serialization** (second
-  concurrent `refresh!/1` observes the first's write, no second HTTP call),
+- the one-time-use refresh-token serialization (now backed by the dedicated
+  database lease; a second concurrent `refresh!/1` observes the first's write,
+  with no second HTTP call),
 - refresh error shapes (`:no_refresh_token`, `{:refresh_failed, status}`,
   `{:refresh_request_failed, _}`),
 - session-token accept/reject (valid / wrong shop / expired / bad audience).
@@ -153,4 +154,3 @@ took down `cookie-store-8660` for 65+ hours). That extraction+persistence now
 lives entirely in `ManagedInstall.build_shop_attrs/2`. The fork should carry an
 explicit test that all four token-lifecycle fields survive a token exchange, so
 the regression can't reappear in the library the way it did in the app.
-

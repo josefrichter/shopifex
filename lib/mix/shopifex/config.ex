@@ -20,7 +20,7 @@ defmodule Mix.Shopifex.Config do
     # in-memory default is node-local and drops grants on multi-node deploys.
     redirect_after_agent: Shopifex.RedirectAfter.Ecto,
     scopes: "read_products",
-    api_version: "2026-04", # Shopify Admin API version used for all GraphQL calls
+    api_version: "2026-07", # Shopify Admin API version used for all GraphQL calls
     api_key: "your_shopify_api_key", #TODO: update
     secret: "shopifyapisecret456", #TODO: update
     webhook_topics: ["app/uninstalled"] # Subscribed via GraphQL on install. GDPR/compliance topics belong in shopify.app.toml, not here.

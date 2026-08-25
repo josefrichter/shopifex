@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cross-node refresh-token leases.** `Shopifex.Auth.refresh!/1` now serializes
+  one-time-use refresh tokens through the dedicated
+  `shopifex_token_refresh_leases` table. Fresh installer migrations include the
+  table; existing Shopifex 3 consumers must add the documented migration.
 - **`Shopifex.Plug.ValidateHmac, require_timestamp: true`** — a per-plug option
   that rejects any signed request lacking a `timestamp` (default `false` keeps the
   existing "missing timestamp is allowed" behavior for non-proxy flows).
@@ -49,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Token refresh no longer performs Shopify HTTP inside a `SELECT … FOR UPDATE`
+  transaction.** The outbound request now holds neither the consumer's shop row
+  lock nor a database connection. A short final transaction re-checks token
+  fields before persisting, preventing a concurrent managed-install exchange
+  from being overwritten.
 - **`complete_payment/2` no longer 500s on a redirect-cache miss.** It now
   responds `403` (a `Plug.Conn`) instead of returning a bare `{:error, :forbidden}`
   tuple, which raised unless the app had wired an `action_fallback`.
@@ -71,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The default Shopify Admin GraphQL API version is now `2026-07`. Shopifex's
+  webhook and billing operations were validated against the 2026-07 schema
+  without query changes.
 - **`postgrex` is now a `:dev`/`:test`-only dependency.** The library never calls
   Postgrex directly (only the test dummy repo does); downstream apps already bring
   their own driver.

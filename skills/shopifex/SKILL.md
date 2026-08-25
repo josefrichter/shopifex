@@ -110,12 +110,13 @@ config :shopifex,
   scopes: "read_orders,read_products",          # MUST mirror shopify.app.toml [access_scopes]
   webhook_topics: ["app/uninstalled", "orders/create"],
   webhook_uri: "https://your-tunnel/webhook",
-  api_version: "2026-04",
+  api_version: "2026-07",
   api_key: System.get_env("SHOPIFY_API_KEY"),
   secret: System.get_env("SHOPIFY_API_SECRET")
 ```
 Shop schema needs the token-lifecycle columns (`token_expires_at`, `refresh_token`,
 `refresh_token_expires_at`; nullable `scope`). `mix shopifex.install` generates them.
+Background refresh also requires the generated `shopifex_token_refresh_leases` table.
 The endpoint's `Plug.Parsers` must use `body_reader: {ShopifexWeb.CacheBodyReader, :read_body, []}`
 or webhook HMAC verification breaks.
 

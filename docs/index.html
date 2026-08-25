@@ -302,7 +302,7 @@ mix ecto.migrate</code></pre>
   # Topics Shopify subscribes you to on install. We want order events.
   webhook_topics: ["app/uninstalled", "orders/create"],
   webhook_uri: "https://your-app.ngrok.io/webhook",
-  api_version: "2026-04",
+  api_version: "2026-07",
   api_key: System.get_env("SHOPIFY_API_KEY"),
   secret: System.get_env("SHOPIFY_API_SECRET")</code></pre>
     <div class="callout tip"><span class="tag">These are <em>your</em> app's choices</span> <code>webhook_topics</code> and <code>scopes</code> are picked for this tutorial. In your own app you'll swap in whatever events and data you need &mdash; but always keep <code>"app/uninstalled"</code> in <code>webhook_topics</code> (so you can clean up when a merchant removes your app), and only request scopes you actually use (Shopify's review gets stricter the more you ask for).</div>

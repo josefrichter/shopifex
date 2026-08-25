@@ -29,7 +29,7 @@ defmodule Shopifex do
       config :shopifex,
         api_key: System.get_env("SHOPIFY_API_KEY"),
         secret: System.get_env("SHOPIFY_API_SECRET"),
-        api_version: "2026-04"
+        api_version: "2026-07"
 
   In your Shopify app config (`shopify.app.toml`), point the app URL at
   `https://your-app/auth`. New apps use **managed installation** — Shopify
@@ -59,8 +59,9 @@ defmodule Shopifex do
 
   - **Embedded** — `ManagedInstall` re-exchanges the `id_token` before expiry.
   - **Background** (schedulers, webhooks) — `Shopifex.Auth` refreshes via the
-    stored refresh token, serialized per-shop with a `SELECT … FOR UPDATE`
-    lock (one-time-use tokens can't be refreshed concurrently).
+    stored refresh token, serialized per-shop with a dedicated database lease
+    (one-time-use tokens can't be refreshed concurrently). The Shopify request
+    does not hold a transaction or lock on the app's shop row.
   - **Every API call** — `Shopifex.API.graphql/3` refreshes proactively before
     a call and reactively on a `401`.
 
