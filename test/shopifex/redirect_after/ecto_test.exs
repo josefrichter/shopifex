@@ -32,9 +32,6 @@ defmodule Shopifex.RedirectAfter.EctoTest do
   end
 
   test "a value set in one process is recovered in another (not process-local)" do
-    # This is what the in-memory Agent cannot guarantee across nodes. With a
-    # shared DB connection (DataCase shared sandbox), a separate process sees the
-    # row the test wrote.
     Store.set("424242", "/cross/process")
 
     task = Task.async(fn -> Store.get("424242") end)
@@ -46,5 +43,11 @@ defmodule Shopifex.RedirectAfter.EctoTest do
     Store.set("555", "/first")
     Store.set("555", "/second")
     assert Store.get("555") == "/second"
+  end
+
+  test "non-integer binary charge_id treated as miss without raising" do
+    assert Store.get("not_an_int") == nil
+    assert Store.set("not_an_int", "/foo") == :ok
+    assert Store.get("not_an_int") == nil
   end
 end

@@ -48,6 +48,22 @@ defmodule Shopifex.TestTest do
     refute ValidateHmac.call(conn, []).halted
   end
 
+  test "sign_query_hmac/1 matches an independently computed HMAC digest" do
+    params = %{"shop" => @shop, "timestamp" => to_string(System.system_time(:second))}
+    secret = Application.fetch_env!(:shopifex, :secret)
+
+    query_string =
+      params
+      |> Enum.sort()
+      |> Enum.map_join("&", fn {k, v} -> "#{k}=#{v}" end)
+
+    expected =
+      :crypto.mac(:hmac, :sha256, secret, query_string)
+      |> Base.encode16(case: :lower)
+
+    assert sign_query_hmac(params) == expected
+  end
+
   test "sign_query_hmac/2 handles the `ids` bulk-action quirk (round-trips through ValidateHmac)" do
     params = %{
       "ids" => ["1", "2"],

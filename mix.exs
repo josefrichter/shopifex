@@ -20,7 +20,8 @@ defmodule Shopifex.MixProject do
           "GitHub" => "https://github.com/josefrichter/shopifex",
           "Upstream (original)" => "https://github.com/ericdude4/shopifex"
         },
-        files: ~w(lib LICENSE mix.exs README.md CHANGELOG.md docs/parity-matrix.md )
+        files:
+          ~w(lib LICENSE mix.exs README.md CHANGELOG.md docs/parity-matrix.md docs/upgrading.md)
       ],
       # Docs
       name: "Shopifex",
@@ -30,7 +31,7 @@ defmodule Shopifex.MixProject do
         # The main page in the docs
         main: "Shopifex",
         logo: "guides/images/s.png",
-        extras: ["README.md", "CHANGELOG.md", "docs/parity-matrix.md"],
+        extras: ["README.md", "CHANGELOG.md", "docs/parity-matrix.md", "docs/upgrading.md"],
         filter_prefix: "Shopifex"
       ]
     ]
@@ -62,7 +63,7 @@ defmodule Shopifex.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.0"},
       {:jose, "~> 1.11"},
-      {:ex_doc, "~> 0.14", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:cors_plug, "~> 2.0 or ~> 3.0"},
       {:req, "~> 0.5"}
     ]

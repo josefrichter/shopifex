@@ -1,7 +1,6 @@
 defmodule Shopifex do
   @moduledoc """
   Boilerplate for building Shopify **embedded** apps with Phoenix.
-  [https://hexdocs.pm/shopifex](https://hexdocs.pm/shopifex)
 
   Shopifex handles the modern Shopify app lifecycle: managed installation via
   token exchange, expiring offline access tokens (with background refresh),
@@ -12,7 +11,7 @@ defmodule Shopifex do
 
       def deps do
         [
-          {:shopifex, "~> 3.0"}
+          {:shopifex, github: "josefrichter/shopifex", branch: "modern-shopifex"}
         ]
       end
 

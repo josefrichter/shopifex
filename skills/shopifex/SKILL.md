@@ -65,7 +65,10 @@ The two controllers are usually empty — `use ShopifexWeb.AuthController` and
 ## LiveView
 Inside `shopifex_live_session`, `@current_shop` and `@session_token` are assigned. In
 `mount/3`, read `socket.assigns.current_shop` and call your context, which calls
-`Shopifex.API.graphql/3`. For real-time, broadcast from a webhook handler over
+`Shopifex.API.graphql/3`. **`@session_token` is not reusable for navigation** — under the
+`:embedded` on_mount hook it's `nil` (Shopify's `id_token` lives ~60s and App Bridge doesn't
+reissue one on a client-side `navigate`); use a plain `<.link navigate={...}>` between
+LiveViews in the same `live_session`. For real-time, broadcast from a webhook handler over
 `Phoenix.PubSub` and `subscribe` in `mount` (only when `connected?(socket)`).
 
 ## Webhooks
@@ -85,7 +88,9 @@ end
 ```
 Topics are subscribed on install from `config :shopifex, :webhook_topics` (always keep
 `"app/uninstalled"`). Webhook HMAC is verified for you. Subscriptions self-heal on the
-next token re-exchange.
+next managed-install token re-exchange. **TOML or GraphQL, not both:** if webhooks are
+declared in `shopify.app.toml` `[webhooks]`, set `:webhook_topics` to `[]` — otherwise each
+TOML topic looks unregistered to Shopifex's reconcile and gets a duplicate API subscription.
 
 ## Billing (PaymentGuard)
 Guard a route; unpaid shops get bounced to a plan picker, charged, then let back in.
@@ -98,7 +103,12 @@ Config `payment_guard`, `plan_schema`, `grant_schema`, `payment_redirect_uri`; a
 `MyApp.Shops.PaymentGuard` that `use Shopifex.PaymentGuard`; a `PaymentController` that
 `use ShopifexWeb.PaymentController`. A **Plan** is a DB row that `grants` a named string;
 create with `Shopifex.Shops.create_plan/1` (use `test: true` on dev stores). Override
-`create_charge/2` for custom pricing (recurring/one-time/usage/discounts).
+`create_charge/2` for custom pricing (recurring/one-time/usage/discounts), or the overridable
+`verify_charge/3` to change how a charge's status is confirmed with Shopify. The standard
+`select_plan/2` binds the charge to `{shop, plan, redirect_after}` via
+`ShopifexWeb.PaymentController.bind_charge/4` before redirecting to Shopify — **any custom
+select-plan action must call `bind_charge/4` itself**, or `complete_payment/2` rejects the
+return with `403`. `use_grant/2` may return `nil` (usages already exhausted).
 
 ## Config (minimum)
 ```elixir
@@ -153,3 +163,9 @@ add `<meta name="shopify-api-key">` + `app-bridge.js` + `polaris.js`, then use `
    scopes/config.
 8. **Don't reach for legacy OAuth** for new apps — managed install is the default and the
    `/auth` route handles it.
+9. **A custom select-plan action must call `bind_charge/4`** before redirecting to Shopify's
+   confirmation URL, or the billing return trip (`complete_payment/2`) rejects the charge
+   with `403` regardless of whether the merchant actually paid.
+10. **`Shopifex.API.graphql/3` can return `{:error, {:token_refresh_failed, reason}}`** — a
+    third error shape alongside the GraphQL `errors` list and `{status, body}`/transport
+    errors. Handle it if you pattern-match the error tuple.

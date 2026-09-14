@@ -13,6 +13,17 @@ defmodule Shopifex.Plug.SetCSPHeaderTest do
       assert ["frame-ancestors https://admin.shopify.com https://shopifex.myshopify.com;"] =
                Plug.Conn.get_resp_header(conn, "content-security-policy")
     end
+
+    test "preserves existing CSP headers alongside frame-ancestors", %{conn: conn} do
+      conn =
+        conn
+        |> Plug.Conn.put_resp_header("content-security-policy", "script-src 'self'")
+        |> SetCSPHeader.call([])
+
+      headers = Plug.Conn.get_resp_header(conn, "content-security-policy")
+      assert "script-src 'self'" in headers
+      assert Enum.any?(headers, &String.starts_with?(&1, "frame-ancestors"))
+    end
   end
 
   describe "no shop session present in conn" do

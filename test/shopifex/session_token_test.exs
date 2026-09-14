@@ -1,5 +1,6 @@
 defmodule Shopifex.SessionTokenTest do
-  use ExUnit.Case, async: true
+  # async: false — the ":old_secret" describe block mutates the global `:old_secret` app env.
+  use ExUnit.Case, async: false
 
   alias Shopifex.SessionToken
 
@@ -73,6 +74,37 @@ defmodule Shopifex.SessionTokenTest do
   test "rejects non-binary input" do
     assert {:error, :invalid_token} = SessionToken.verify(nil)
     assert {:error, :invalid_token} = SessionToken.verify(123, @shop)
+  end
+
+  describe "10s clock-skew boundary" do
+    test "accepts a token that expired 9s ago (inside the skew allowance)" do
+      now = System.system_time(:second)
+      token = sign(valid_claims(%{"exp" => now - 9}))
+      assert {:ok, _claims} = SessionToken.verify(token, @shop)
+    end
+
+    test "rejects a token that expired 11s ago (outside the skew allowance)" do
+      now = System.system_time(:second)
+      token = sign(valid_claims(%{"exp" => now - 11}))
+      assert {:error, :expired} = SessionToken.verify(token, @shop)
+    end
+
+    test "accepts a token usable 9s in the future (inside the skew allowance)" do
+      now = System.system_time(:second)
+      token = sign(valid_claims(%{"nbf" => now + 9}))
+      assert {:ok, _claims} = SessionToken.verify(token, @shop)
+    end
+
+    test "rejects a token usable 11s in the future (outside the skew allowance)" do
+      now = System.system_time(:second)
+      token = sign(valid_claims(%{"nbf" => now + 11}))
+      assert {:error, :not_yet_valid} = SessionToken.verify(token, @shop)
+    end
+
+    test "accepts a token with no nbf claim at all" do
+      token = valid_claims() |> Map.delete("nbf") |> sign()
+      assert {:ok, _claims} = SessionToken.verify(token, @shop)
+    end
   end
 
   describe "secret rotation (:old_secret)" do

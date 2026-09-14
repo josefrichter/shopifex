@@ -174,7 +174,9 @@ defmodule Shopifex.Plug.ManagedInstall do
       {:ok, %{status: 200, body: response_body}} when is_map(response_body) ->
         Logger.info("[Shopifex.ManagedInstall] Token exchange successful for #{shop_url}")
 
-        shop = persist_shop(new?, fallback, build_shop_attrs(shop_url, response_body))
+        shop =
+          persist_shop(new?, fallback, Shopifex.TokenResponse.shop_attrs(shop_url, response_body))
+
         build_session_from_shop(conn, shop)
 
       {:ok, %{status: status, body: body}} ->
@@ -191,29 +193,6 @@ defmodule Shopifex.Plug.ManagedInstall do
 
         fallback_session(conn, fallback)
     end
-  end
-
-  # Tolerates responses without `expires_in` / `refresh_token` (non-expiring
-  # tokens, used by older installs or test fixtures) — the expiry timestamps
-  # stay nil and `Shopifex.Auth.ensure_fresh_token/1` treats the token as
-  # non-expiring (background refresh not possible; reactive-401 still works).
-  defp build_shop_attrs(shop_url, body) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-    scope_field = Shopifex.Shops.get_scope_field()
-
-    %{
-      url: shop_url,
-      access_token: body["access_token"],
-      token_expires_at: expires_at(now, body["expires_in"]),
-      refresh_token: body["refresh_token"],
-      refresh_token_expires_at: expires_at(now, body["refresh_token_expires_in"])
-    }
-    # `scope` is nullable and may be absent from the exchange response — persist
-    # what Shopify returned (possibly nil). A `|| ""` fallback here is dead on
-    # arrival: a standard `cast/3` casts `""` back to nil via Ecto's default
-    # `:empty_values`. The one library consumer, `Shopifex.Plug.EnsureScopes`,
-    # reads it as `get_scope(shop) || ""`, so a nil scope is well-defined.
-    |> Map.put(scope_field, body["scope"])
   end
 
   # First install: persist through the configurable managed-install callbacks so
@@ -264,7 +243,4 @@ defmodule Shopifex.Plug.ManagedInstall do
   # retries the exchange.
   defp fallback_session(conn, nil), do: conn
   defp fallback_session(conn, shop), do: build_session_from_shop(conn, shop)
-
-  defp expires_at(_now, nil), do: nil
-  defp expires_at(now, seconds) when is_integer(seconds), do: DateTime.add(now, seconds, :second)
 end

@@ -1,9 +1,14 @@
 defmodule Mix.Shopifex.Grant do
   def attrs(),
     do: [
-      {:charge_id, :bigint},
+      # Nullable: `Shopifex.Shops.create_shop_grant/2` never supplies a
+      # charge_id, and unlimited plans (`plan.usages == nil`) leave
+      # remaining_usages nil. `null: true` drives both the migration column
+      # nullability and skipping the field in the generated
+      # `validate_required/2`.
+      {:charge_id, :bigint, [null: true]},
       {:grants, {:array, :string}},
-      {:remaining_usages, :integer},
+      {:remaining_usages, :integer, [null: true]},
       {:total_usages, :integer, default: 0}
     ]
 

@@ -79,7 +79,7 @@ defmodule Mix.Shopifex.Migration do
       create table(:<%= schema.table %><%= if schema.binary_id do %>, primary_key: false<% end %>) do
   <%= if schema.binary_id do %>      add :id, :binary_id, primary_key: true
   <% end %><%= for {k, v} <- schema.attrs do %>      add <%= inspect k %>, <%= inspect v %><%= schema.defaults[k] %>
-  <% end %><%= for {_, i, _, s} <- schema.assocs do %>      add <%= if(String.ends_with?(inspect(i), "_id"), do: inspect(i), else: inspect(i) <> "_id") %>, references(<%= inspect(s) %>, on_delete: :nothing<%= if schema.binary_id do %>, type: :binary_id<% end %>)
+  <% end %><%= for {_, i, _, s} <- schema.assocs do %>      add <%= if(String.ends_with?(inspect(i), "_id"), do: inspect(i), else: inspect(i) <> "_id") %>, references(<%= inspect(s) %>, on_delete: :delete_all<%= if schema.binary_id do %>, type: :binary_id<% end %>)
   <% end %>
         timestamps()
       end
@@ -90,6 +90,12 @@ defmodule Mix.Shopifex.Migration do
         add :shop_url, :string, primary_key: true
         add :owner, :string, null: false
         add :lease_expires_at, :utc_datetime_usec, null: false
+      end
+
+      create table(:shopifex_charge_redirects, primary_key: false) do
+        add :charge_id, :bigint, primary_key: true
+        add :redirect_after, :text, null: false
+        add :inserted_at, :utc_datetime, null: false
       end
     end
   end

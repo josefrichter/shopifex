@@ -4,6 +4,13 @@ defmodule ShopifexWeb.LiveSession do
   # if the application is using LiveView.
   @compile {:no_warn_undefined, Phoenix.Component}
 
+  @moduledoc """
+  Helpers and hooks for integrating LiveView with Shopifex.
+
+  Note that LiveView session keys are `"shop_url"` and `"session_token"`
+  (in Shopifex 2.x the key was `"current_shop"`).
+  """
+
   @doc """
   Get options that should be passed to `live_session`.
 
@@ -59,7 +66,7 @@ defmodule ShopifexWeb.LiveSession do
   Simplified hook for embedded Shopify apps where third-party cookies are
   blocked. Reads the shop from the session (set during the HTTP request by
   `put_shop_in_session/1`) and does NOT require tokens in URLs or LiveSocket
-  connect params. Redirects to `/auth` if no shop is found.
+  connect params. Redirects to `/auth` (respecting `path_prefix`) if no shop is found.
 
   ### How it works
 
@@ -90,7 +97,8 @@ defmodule ShopifexWeb.LiveSession do
   def on_mount(:embedded, _params, session, socket) do
     case load_shop(session["shop_url"]) do
       nil ->
-        {:halt, Phoenix.LiveView.redirect(socket, to: "/auth")}
+        prefix = Application.get_env(:shopifex, :path_prefix, "")
+        {:halt, Phoenix.LiveView.redirect(socket, to: "#{prefix}/auth")}
 
       shop ->
         {:cont, Phoenix.Component.assign(socket, current_shop: shop, session_token: nil)}

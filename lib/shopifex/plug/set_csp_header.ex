@@ -26,11 +26,11 @@ defmodule Shopifex.Plug.SetCSPHeader do
         allowed_frame_ancestors =
           [@shopify_unified_admin_url | shop_frame_ancestor(Shopifex.Shops.get_url(shop))]
 
-        Plug.Conn.put_resp_header(
-          conn,
-          "content-security-policy",
-          "frame-ancestors #{Enum.join(allowed_frame_ancestors, " ")};"
-        )
+        csp_header =
+          {"content-security-policy",
+           "frame-ancestors #{Enum.join(allowed_frame_ancestors, " ")};"}
+
+        Plug.Conn.prepend_resp_headers(conn, [csp_header])
 
       {:error, :no_current_shop} ->
         raise(__MODULE__,

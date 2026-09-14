@@ -23,7 +23,6 @@ defmodule ShopifexDummyWeb do
 
       import Plug.Conn
       import ShopifexDummyWeb.Gettext
-      alias ShopifexDummyWeb.Router.Helpers, as: Routes
     end
   end
 
@@ -39,7 +38,7 @@ defmodule ShopifexDummyWeb do
 
   def router do
     quote do
-      use Phoenix.Router
+      use Phoenix.Router, helpers: false
 
       import Plug.Conn
       import Phoenix.Controller
@@ -57,7 +56,6 @@ defmodule ShopifexDummyWeb do
     quote do
       import Phoenix.HTML
       import ShopifexDummyWeb.Gettext
-      alias ShopifexDummyWeb.Router.Helpers, as: Routes
     end
   end
 

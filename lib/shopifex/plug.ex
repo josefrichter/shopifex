@@ -5,6 +5,8 @@ defmodule Shopifex.Plug do
   @type shop :: %{access_token: String.t(), scope: String.t(), url: String.t()}
   @type shopify_host :: String.t()
 
+  @default_timestamp_tolerance_seconds 90
+
   @doc """
   Get current request shop resource for give `conn`.
 
@@ -173,6 +175,60 @@ defmodule Shopifex.Plug do
     else
       _ -> nil
     end
+  end
+
+  @doc """
+  Validates that the request timestamp in `conn.query_params["timestamp"]` is fresh.
+
+  Options:
+    * `:require_timestamp` - boolean, default `false`. When `false`, returns `:ok` if no timestamp is present.
+    * `:timestamp_tolerance_seconds` - integer tolerance window in seconds. Defaults to
+      `Application.get_env(:shopifex, :hmac_timestamp_tolerance_seconds, 90)`.
+
+  Returns `:ok` or `{:error, reason}` where `reason` is `"missing timestamp"` or `"stale timestamp"`.
+  """
+  @spec validate_timestamp(conn :: Plug.Conn.t(), opts :: keyword()) :: :ok | {:error, String.t()}
+  def validate_timestamp(conn, opts \\ []) do
+    # Idempotent: safe even when an earlier plug (or the router) already
+    # fetched query params. Without this, a bare `Plug.Test.conn/2` (no
+    # `Plug.Parsers`/router in front of it) has `conn.query_params` as
+    # `%Plug.Conn.Unfetched{}`, and reading it below would raise.
+    conn = Plug.Conn.fetch_query_params(conn)
+
+    case conn.query_params["timestamp"] do
+      nil ->
+        if Keyword.get(opts, :require_timestamp, false) do
+          {:error, "missing timestamp"}
+        else
+          :ok
+        end
+
+      timestamp ->
+        with {seconds, _} <- Integer.parse(to_string(timestamp)),
+             true <-
+               abs(System.system_time(:second) - seconds) <= timestamp_tolerance_seconds(opts) do
+          :ok
+        else
+          _ -> {:error, "stale timestamp"}
+        end
+    end
+  end
+
+  @doc """
+  Returns true if the request timestamp is fresh according to `validate_timestamp/2`.
+  """
+  @spec timestamp_fresh?(conn :: Plug.Conn.t(), opts :: keyword()) :: boolean()
+  def timestamp_fresh?(conn, opts \\ []) do
+    validate_timestamp(conn, opts) == :ok
+  end
+
+  defp timestamp_tolerance_seconds(opts) do
+    Keyword.get(opts, :timestamp_tolerance_seconds) ||
+      Application.get_env(
+        :shopifex,
+        :hmac_timestamp_tolerance_seconds,
+        @default_timestamp_tolerance_seconds
+      )
   end
 
   @doc false

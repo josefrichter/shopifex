@@ -62,7 +62,7 @@ defmodule Shopifex.Auth do
 
   Tests can inject Req options (e.g. a `Req.Test` plug) via:
 
-      config :shopifex, :req_options, plug: {Req.Test, Shopifex.Auth}
+      config :shopifex, :req_options, plug: {Req.Test, Shopifex.ReqStub}
 
   Refresh coordination can be tuned when necessary:
 
@@ -91,42 +91,67 @@ defmodule Shopifex.Auth do
   # expiry while a request is in flight.
   @safety_window_seconds 5 * 60
 
+  # Treat a refresh token this close to expiry as already spent. Shopify
+  # rejects an expired refresh token with an opaque error, so checking locally
+  # turns a doomed round-trip into an immediate, specific failure. Mirrors the
+  # 60s allowance in ShopifyAPI::Auth::Session#refresh_token_expired?.
+  @refresh_token_skew_seconds 60
+
+  # Retry-related tuning for `refresh_retry/2`. See `request_refresh/1`.
+  @refresh_retry_statuses [408, 429, 500, 502, 503, 504]
+  @refresh_retry_transport_reasons [:timeout, :econnrefused, :closed]
+  @refresh_retry_default_delay_ms 1_000
+  @refresh_retry_max_delay_ms 5_000
+
   defp repo, do: Shopifex.Shops.repo()
   defp shop_schema, do: Shopifex.Shops.shop_schema()
 
   @doc """
-  Returns a shop whose `access_token` is guaranteed fresh enough to make at
-  least one Shopify API call against.
+  Returns `{:ok, shop}` with an access_token guaranteed fresh enough to make
+  at least one Shopify API call against, or `{:error, reason}` if a needed
+  refresh fails.
 
   Strategy:
-  - Token expiry is unknown (`nil`) → return the shop as-is. The caller is
+  - Token expiry is unknown (`nil`) → `{:ok, shop}` as-is. The caller is
     responsible for invoking `refresh!/1` reactively on 401. This covers
     legacy shops that pre-date the expiry columns.
-  - Token expires within the safety window → refresh and return the updated
-    shop.
-  - Otherwise → return the shop as-is.
+  - Token expires within the safety window → refresh and return
+    `refresh!/1`'s result.
+  - Otherwise → `{:ok, shop}` as-is.
+
+  `reason` is whatever `refresh!/1` returns; see its docs for the terminal
+  vs. transient distinction (`terminal_refresh_error?/1`).
+  """
+  @spec fresh_token(struct()) :: {:ok, struct()} | {:error, term()}
+  def fresh_token(shop) do
+    cond do
+      is_nil(Map.get(shop, :token_expires_at)) ->
+        {:ok, shop}
+
+      expires_within_safety_window?(shop) ->
+        refresh!(shop)
+
+      true ->
+        {:ok, shop}
+    end
+  end
+
+  @doc """
+  Same as `fresh_token/1`, but always returns the shop rather than an error
+  tuple: on refresh failure it returns the (now-stale) input shop instead of
+  propagating the error.
+
+  This is the right default for background workers, where a transient
+  refresh error shouldn't crash the caller. `Shopifex.API.graphql/3` reacts
+  to a stale token via its 401 retry. Callers that need to distinguish
+  success from failure (or terminal from transient errors) should call
+  `fresh_token/1` directly.
   """
   @spec ensure_fresh_token(struct()) :: struct()
   def ensure_fresh_token(shop) do
-    cond do
-      is_nil(Map.get(shop, :token_expires_at)) ->
-        shop
-
-      expires_within_safety_window?(shop) ->
-        case refresh!(shop) do
-          {:ok, refreshed} ->
-            refreshed
-
-          # On refresh failure, return the (now-stale) shop. The caller will
-          # likely 401; Shopifex.API's reactive path handles that by retrying
-          # the refresh, and if that fails too the error surfaces. We don't
-          # want to crash background workers on transient refresh issues.
-          {:error, _reason} ->
-            shop
-        end
-
-      true ->
-        shop
+    case fresh_token(shop) do
+      {:ok, refreshed} -> refreshed
+      {:error, _reason} -> shop
     end
   end
 
@@ -144,12 +169,43 @@ defmodule Shopifex.Auth do
 
   A caller that cannot acquire or observe completion of the lease before the
   configured wait deadline receives `{:error, :refresh_in_progress}`.
+
+  A shop whose stored `refresh_token_expires_at` has passed (or is within a
+  60s skew of passing) fails fast with `{:error, :refresh_token_expired}`
+  without contacting Shopify. Recovery is the same as for a rejected refresh:
+  the merchant opens the embedded app, and `Shopifex.Plug.ManagedInstall`
+  re-exchanges the `id_token` for a fresh token pair.
+
+  See `terminal_refresh_error?/1` for which `reason` values are worth
+  giving up on vs. worth retrying later.
   """
   @spec refresh!(struct()) :: {:ok, struct()} | {:error, term()}
   def refresh!(shop) do
     deadline = System.monotonic_time(:millisecond) + TokenRefreshLease.wait_timeout_ms()
     refresh_with_lease(shop, deadline)
   end
+
+  @doc """
+  Classifies a `refresh!/1` / `fresh_token/1` error reason as terminal
+  (retrying won't help without merchant action) or transient (worth retrying,
+  e.g. with the shop's current token).
+
+  Terminal: `:refresh_token_expired`, `:no_refresh_token`,
+  `{:refresh_failed, 400}`, `{:refresh_failed, 401}`, `:shop_not_found`.
+
+  Transient (returns `false`): `:refresh_in_progress`,
+  `{:refresh_failed, 5xx}`, transport errors, and anything else unrecognized.
+
+  `Shopifex.API.graphql/3` uses this to decide whether to send the request
+  with a stale token or fail immediately.
+  """
+  @spec terminal_refresh_error?(term()) :: boolean()
+  def terminal_refresh_error?(:refresh_token_expired), do: true
+  def terminal_refresh_error?(:no_refresh_token), do: true
+  def terminal_refresh_error?(:shop_not_found), do: true
+  def terminal_refresh_error?({:refresh_failed, 400}), do: true
+  def terminal_refresh_error?({:refresh_failed, 401}), do: true
+  def terminal_refresh_error?(_reason), do: false
 
   defp refresh_with_lease(original_shop, deadline) do
     case reload_shop(original_shop) do
@@ -163,6 +219,9 @@ defmodule Shopifex.Auth do
 
           is_nil(Map.get(current_shop, :refresh_token)) ->
             {:error, :no_refresh_token}
+
+          refresh_token_expired?(current_shop) ->
+            {:error, :refresh_token_expired}
 
           true ->
             acquire_or_wait(current_shop, original_shop, deadline)
@@ -214,18 +273,34 @@ defmodule Shopifex.Auth do
           is_nil(Map.get(current_shop, :refresh_token)) ->
             {:error, :no_refresh_token}
 
-          true ->
-            with {:ok, response_body} <- request_refresh(current_shop),
-                 {:ok, refreshed_shop} <- persist_refreshed_shop(current_shop, response_body) do
-              Logger.info(
-                "[Shopifex.Auth] Refresh token grant successful for #{Shopifex.Shops.get_url(refreshed_shop)}"
-              )
+          refresh_token_expired?(current_shop) ->
+            {:error, :refresh_token_expired}
 
-              {:ok, refreshed_shop}
+          true ->
+            with {:ok, response_body} <- request_refresh(current_shop) do
+              handle_persisted_refresh(persist_refreshed_shop(current_shop, response_body))
             end
         end
     end
   end
+
+  defp handle_persisted_refresh({:ok, refreshed_shop}) do
+    Logger.info(
+      "[Shopifex.Auth] Refresh token grant successful for #{Shopifex.Shops.get_url(refreshed_shop)}"
+    )
+
+    {:ok, refreshed_shop}
+  end
+
+  defp handle_persisted_refresh({:ok, :superseded, shop}) do
+    Logger.info(
+      "[Shopifex.Auth] Refresh token grant superseded by a concurrent token exchange for #{Shopifex.Shops.get_url(shop)}"
+    )
+
+    {:ok, shop}
+  end
+
+  defp handle_persisted_refresh({:error, _reason} = error), do: error
 
   defp request_refresh(shop) do
     api_key = Application.fetch_env!(:shopifex, :api_key)
@@ -243,10 +318,48 @@ defmodule Shopifex.Auth do
     req_opts =
       [
         body: body,
-        headers: [{"content-type", "application/x-www-form-urlencoded"}]
+        headers: [{"content-type", "application/x-www-form-urlencoded"}],
+        # Shopify documents refreshes as resilient to ambiguous failures: a
+        # request that times out, errors, or returns a transient 5xx should be
+        # retried with the SAME refresh token, and the repeat returns the same
+        # rotated credentials rather than issuing another pair.
+        #
+        # Req's built-in `retry: :transient` can't be used here: Req 0.5.17
+        # parses the `Retry-After` header before consulting `:retry_delay`,
+        # and `Req.Response.retry_delay_in_ms/1` only handles integer-second
+        # values. Shopify documents a float (`Retry-After: 2.0`), which
+        # raises `CaseClauseError` and would escape `refresh!/1` into the
+        # caller. `refresh_retry/2` below replaces it: same transient set
+        # (408, 429, 500, 502, 503, 504, plus transport `:timeout` /
+        # `:econnrefused` / `:closed`), but it parses `Retry-After` itself
+        # (integer or float seconds, rounded up, capped at
+        # `@refresh_retry_max_delay_ms`), falls back to a default delay for
+        # an HTTP-date or unparseable value, and never returns `true` when
+        # the header is present (that would hand the value back to Req's own
+        # parser and hit the same crash).
+        #
+        # A terminal 400/401 is deliberately not in the transient set, so a
+        # genuinely spent refresh token still fails immediately.
+        #
+        # Two retries (3 attempts total) rather than Req's default three:
+        # these run while the refresh lease is held, and other callers are
+        # waiting on `token_refresh_wait_timeout_ms` (15s by default) before
+        # falling back to their stale token. Worst case: 3 attempts x (5s
+        # connect + 10s receive) + 2 x 5s retry delay ~= 55s, comfortably
+        # below the 120s lease TTL in `Shopifex.TokenRefreshLease`.
+        retry: &refresh_retry/2,
+        max_retries: 2,
+        receive_timeout: 10_000,
+        connect_options: [timeout: 5_000]
       ] ++ Application.get_env(:shopifex, :req_options, [])
 
-    case Req.post("https://#{url}/admin/oauth/access_token", req_opts) do
+    req =
+      Req.new(req_opts)
+      |> Req.Request.prepend_response_steps(
+        refresh_sanitize_retry: &sanitize_refresh_retry_delay/1
+      )
+
+    case Req.post(req, url: "https://#{url}/admin/oauth/access_token") do
       {:ok, %{status: 200, body: response_body}} when is_map(response_body) ->
         {:ok, response_body}
 
@@ -263,6 +376,62 @@ defmodule Shopifex.Auth do
     end
   end
 
+  # Req raises when a `:retry` function returns `{:delay, ms}` while `:retry_delay`
+  # is also set (deps/req/lib/req/steps.ex). Test config sets `retry_delay: 0`, so
+  # without this step every Retry-After response would raise here in tests, and in
+  # any host app that also configures `:retry_delay`.
+  defp sanitize_refresh_retry_delay({request, %Req.Response{} = response}) do
+    if refresh_retry_delay_ms(response) do
+      {Req.Request.delete_option(request, :retry_delay), response}
+    else
+      {request, response}
+    end
+  end
+
+  defp sanitize_refresh_retry_delay({request, other}), do: {request, other}
+
+  # `retry: &refresh_retry/2` for the refresh request (see `request_refresh/1`
+  # for why Req's own `:transient` retry can't be used).
+  defp refresh_retry(_request, %Req.Response{status: status} = response)
+       when status in @refresh_retry_statuses do
+    case refresh_retry_delay_ms(response) do
+      nil -> true
+      ms -> {:delay, ms}
+    end
+  end
+
+  defp refresh_retry(_request, %Req.TransportError{reason: reason})
+       when reason in @refresh_retry_transport_reasons do
+    true
+  end
+
+  defp refresh_retry(_request, _response_or_exception), do: false
+
+  @doc false
+  @spec refresh_retry_delay_ms(Req.Response.t()) :: non_neg_integer() | nil
+  def refresh_retry_delay_ms(response) do
+    case Req.Response.get_header(response, "retry-after") do
+      [value] -> value |> parse_retry_after_seconds() |> to_capped_delay_ms()
+      [] -> nil
+    end
+  end
+
+  # Accepts integer or float seconds (Shopify documents a float, e.g. "2.0",
+  # which Req 0.5.17's own parser can't handle). An HTTP-date or anything
+  # else unparseable returns nil and falls back to the default delay.
+  defp parse_retry_after_seconds(value) do
+    case Float.parse(value) do
+      {seconds, ""} when seconds >= 0 -> seconds
+      _ -> nil
+    end
+  end
+
+  defp to_capped_delay_ms(nil), do: @refresh_retry_default_delay_ms
+
+  defp to_capped_delay_ms(seconds) do
+    seconds |> Kernel.*(1000) |> ceil() |> min(@refresh_retry_max_delay_ms)
+  end
+
   defp persist_refreshed_shop(shop, body) do
     schema = shop_schema()
 
@@ -274,8 +443,12 @@ defmodule Shopifex.Auth do
         is_nil(locked_shop) ->
           repo().rollback(:shop_not_found)
 
+        # A concurrent managed-install exchange already rotated the tokens
+        # (e.g. the merchant opened the embedded app while this refresh was
+        # in flight). Their pair wins; ours is discarded rather than
+        # clobbering it.
         token_state_changed?(locked_shop, shop) ->
-          locked_shop
+          {:superseded, locked_shop}
 
         true ->
           now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -296,9 +469,19 @@ defmodule Shopifex.Auth do
           end
       end
     end)
+    |> case do
+      {:ok, {:superseded, shop}} -> {:ok, :superseded, shop}
+      {:ok, refreshed_shop} -> {:ok, refreshed_shop}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
-  defp reload_shop(shop), do: repo().get(shop_schema(), Map.fetch!(shop, :id))
+  defp reload_shop(shop) do
+    case Map.get(shop, :id) do
+      nil -> nil
+      id -> repo().get(shop_schema(), id)
+    end
+  end
 
   defp already_refreshed?(current_shop, original_shop) do
     not expires_within_safety_window?(current_shop) and
@@ -319,6 +502,27 @@ defmodule Shopifex.Auth do
 
       %DateTime{} = expires_at ->
         DateTime.diff(expires_at, DateTime.utc_now(), :second) <= @safety_window_seconds
+
+      %NaiveDateTime{} = expires_at ->
+        NaiveDateTime.diff(expires_at, NaiveDateTime.utc_now(), :second) <=
+          @safety_window_seconds
+    end
+  end
+
+  # A `nil` expiry means the refresh token doesn't expire (or predates the
+  # column), so it is never considered spent — same treatment legacy installs
+  # get everywhere else in this module.
+  defp refresh_token_expired?(shop) do
+    case Map.get(shop, :refresh_token_expires_at) do
+      nil ->
+        false
+
+      %DateTime{} = expires_at ->
+        DateTime.diff(expires_at, DateTime.utc_now(), :second) <= @refresh_token_skew_seconds
+
+      %NaiveDateTime{} = expires_at ->
+        NaiveDateTime.diff(expires_at, NaiveDateTime.utc_now(), :second) <=
+          @refresh_token_skew_seconds
     end
   end
 

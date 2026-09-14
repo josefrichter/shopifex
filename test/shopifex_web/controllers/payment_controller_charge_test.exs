@@ -1,7 +1,19 @@
 defmodule ShopifexWeb.PaymentControllerChargeTest do
   use Shopifex.DataCase, async: false
 
+  import Phoenix.ConnTest
+
   alias Shopifex.Shops
+
+  @endpoint ShopifexDummyWeb.Endpoint
+
+  # Signs a query-HMAC so the request passes the `:shopify_session` pipeline,
+  # the same way a real Shopify admin-embedded request would.
+  defp signed_select_plan_query_string(shop_url) do
+    query = %{"shop" => shop_url, "timestamp" => to_string(System.system_time(:second))}
+    hmac = Shopifex.Test.sign_query_hmac(query)
+    URI.encode_query(Map.put(query, "hmac", hmac))
+  end
 
   setup do
     shop =
@@ -299,6 +311,148 @@ defmodule ShopifexWeb.PaymentControllerChargeTest do
       assert {:ok, _} = ShopifexDummyWeb.PaymentController.create_charge(shop, plan)
       assert_received {:graphql, %{"variables" => variables}}
       assert variables["price"]["currencyCode"] == "EUR"
+    end
+  end
+
+  describe "select_plan/2 and bind_charge/4" do
+    test "select_plan binds the charge and returns 200 JSON", %{shop: shop} do
+      {:ok, plan} =
+        Shops.create_plan(%{
+          name: "Plan 100",
+          price: "10.00",
+          type: "recurring_application_charge",
+          features: ["feat"],
+          grants: ["g100"],
+          test: true
+        })
+
+      stub_charge(
+        "appSubscriptionCreate",
+        "appSubscription",
+        "gid://shopify/AppSubscription/888123"
+      )
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.put_private(:shopifex, %{shop: shop})
+
+      resp =
+        ShopifexDummyWeb.PaymentController.select_plan(conn, %{
+          "plan_id" => to_string(plan.id),
+          "redirect_after" => "/after-select"
+        })
+
+      assert resp.status == 200
+
+      assert %{"id" => "888123", "confirmation_url" => "https://confirm.example/charge"} =
+               Jason.decode!(resp.resp_body)
+
+      binding_blob = Shopifex.RedirectAfterAgent.get(888_123)
+      assert is_binary(binding_blob)
+      assert {:ok, verified} = Shopifex.ChargeBinding.verify(binding_blob)
+      assert verified.shop_url == shop.url
+      assert verified.plan_id == to_string(plan.id)
+      assert verified.redirect_after == "/after-select"
+    end
+
+    test "select_plan responds with 422 JSON when create_charge returns an error", %{shop: shop} do
+      {:ok, plan} =
+        Shops.create_plan(%{
+          name: "Error Plan",
+          price: "10.00",
+          type: "recurring_application_charge",
+          features: ["feat"],
+          grants: ["g_err"],
+          test: true
+        })
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        Req.Test.json(conn, %{
+          "data" => %{
+            "appSubscriptionCreate" => %{
+              "appSubscription" => nil,
+              "confirmationUrl" => nil,
+              "userErrors" => [%{"field" => ["price"], "message" => "is invalid"}]
+            }
+          }
+        })
+      end)
+
+      conn =
+        Phoenix.ConnTest.build_conn()
+        |> Plug.Conn.put_private(:shopifex, %{shop: shop})
+
+      resp =
+        ShopifexDummyWeb.PaymentController.select_plan(conn, %{
+          "plan_id" => to_string(plan.id),
+          "redirect_after" => "/after-err"
+        })
+
+      assert resp.status == 422
+
+      assert %{"errors" => [%{"field" => ["price"], "message" => "is invalid"}]} =
+               Jason.decode!(resp.resp_body)
+    end
+
+    test "router: a 502 from Shopify's GraphQL API is normalised to 422 JSON, not a 500", %{
+      shop: shop
+    } do
+      {:ok, plan} =
+        Shops.create_plan(%{
+          name: "Gateway Error Plan",
+          price: "10.00",
+          type: "recurring_application_charge",
+          features: ["feat"],
+          grants: ["g_502"],
+          test: true
+        })
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        conn |> Plug.Conn.put_status(502) |> Req.Test.json(%{"error" => "bad gateway"})
+      end)
+
+      query_string = signed_select_plan_query_string(shop.url)
+
+      conn =
+        build_conn()
+        |> post("/payment/select-plan?" <> query_string, %{
+          "plan_id" => to_string(plan.id),
+          "redirect_after" => "/after-502"
+        })
+
+      assert conn.status == 422
+      assert %{"errors" => [%{"message" => message}]} = Jason.decode!(conn.resp_body)
+      assert message =~ "502"
+    end
+
+    test "router: a transport error from Shopify's GraphQL API is normalised to 422 JSON, not a 500",
+         %{shop: shop} do
+      {:ok, plan} =
+        Shops.create_plan(%{
+          name: "Transport Error Plan",
+          price: "10.00",
+          type: "recurring_application_charge",
+          features: ["feat"],
+          grants: ["g_transport"],
+          test: true
+        })
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        Req.Test.transport_error(conn, :econnrefused)
+      end)
+
+      query_string = signed_select_plan_query_string(shop.url)
+
+      conn =
+        build_conn()
+        |> post("/payment/select-plan?" <> query_string, %{
+          "plan_id" => to_string(plan.id),
+          "redirect_after" => "/after-transport"
+        })
+
+      assert conn.status == 422
+      assert %{"errors" => [%{"message" => message}]} = Jason.decode!(conn.resp_body)
+      assert message =~ "econnrefused"
     end
   end
 end

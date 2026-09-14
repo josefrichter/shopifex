@@ -127,6 +127,22 @@ defmodule Shopifex.Plug.HmacTest do
       assert conn.halted
       assert conn.status == 401
     end
+
+    test "rejects when query timestamp is stale even if body timestamp is fresh (body param shadowing)" do
+      stale = System.system_time(:second) - 1000
+      fresh = System.system_time(:second)
+      query_params = %{"shop" => "x.myshopify.com", "timestamp" => to_string(stale)}
+      hmac = query_hmac(query_params, "&")
+      query_params = Map.put(query_params, "hmac", hmac)
+      body_params = %{"timestamp" => to_string(fresh)}
+      merged_params = Map.merge(query_params, body_params)
+
+      conn = %{Plug.Test.conn(:post, "/") | params: merged_params, query_params: query_params}
+
+      conn = ValidateHmac.call(conn, [])
+      assert conn.halted
+      assert conn.status == 401
+    end
   end
 
   describe "webhook HMAC (ShopifyWebhook) — exact Base64 case" do

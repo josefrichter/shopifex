@@ -5,40 +5,233 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0] - Unreleased
+
+Modernization release: Shopify 2026 compliance, a Guardian-free embedded auth
+model, and a Phoenix 1.8 / function-component baseline. Nothing from this
+branch has been published to Hex yet (the latest published release is 2.4.0).
+
+### Breaking changes
+
+- **Minimum Elixir 1.15 and Phoenix 1.8.** Dropped `phoenix_view`,
+  `phoenix_html_helpers`, and `plug_cowboy` — the library no longer pins a web
+  server (Bandit is the Phoenix 1.8 default) or the legacy view stack. CI
+  verifies Elixir 1.15.8/OTP 26.2 (minimum) and Elixir 1.18.2/OTP 27.3
+  (current) against Phoenix 1.8.8 / Phoenix LiveView 1.2.1 — see
+  `.github/workflows/ci.yml`.
+- **View layer is function components.** `Phoenix.View` modules + `.eex`
+  templates were replaced by `*HTML` modules with co-located `.heex`
+  templates. If you rendered Shopifex views directly, update to
+  `put_view(ShopifexWeb.PaymentHTML)` / `render("show_plans.html", ...)`.
+  `use ShopifexWeb, :view` is gone (it existed in 2.x; a 3.0 app that still
+  calls it hits `UndefinedFunctionError`), and `controller/0` no longer
+  injects `alias _.Router.Helpers, as: Routes` (which also shadowed
+  `ShopifexWeb.Routes`).
+- **Guardian removed.** Embedded auth no longer mints an app JWT. Session
+  tokens (`id_token`) are verified directly by `Shopifex.SessionToken`.
+  `Shopifex.Plug.build_session/4` no longer sets a Guardian token; the
+  `:shopify_api` / `:shopifex_api` pipelines now use
+  `Shopifex.Plug.ShopifyApiAuth`. `AuthController.auth/2` and
+  `PaymentController` redirect to the app root instead of appending `?token=`.
+  LiveView session keys are renamed `"shop_url"` / `"session_token"` (2.x used
+  `"current_shop"`).
+- **Webhooks and billing are GraphQL.** REST webhook (`webhooks.json`) and
+  charge (`recurring_application_charges` / `application_charges`) endpoints
+  were removed, along with the `neuron` dependency. `get_current_webhooks/1`
+  returns `%{id, topic}` maps with GraphQL enum topics (e.g. `"ORDERS_CREATE"`,
+  not `"orders/create"`). `Shopifex.Shops.delete_webhook/2` now takes a
+  GraphQL `id` (a GID string, not a REST webhook id) and returns
+  `{:ok, id} | {:error, errors}`.
+- **Embedded payment routes are the default.** `payment_routes/2` defaults to
+  the CSP-protected embedded pipeline; pass `shopify_embedded: false` to opt
+  out.
+- **Billing charges are cryptographically bound and verified with Shopify.**
+  `complete_payment/2` requires a signed charge binding created by
+  `ShopifexWeb.PaymentController.bind_charge/4` and verifies the charge's
+  status with Shopify via the (new, overridable) `verify_charge/3` callback
+  before creating a `Grant`. Any custom `select_plan`-style action **must**
+  call `bind_charge/4` before redirecting to Shopify's confirmation URL, or
+  `complete_payment/2` rejects the return with `403`. `create_charge/2` is
+  also an overridable callback. Charge ids are strings throughout this path
+  (the trailing numeric segment of a GraphQL GID), not integers.
+  `Shopifex.RedirectAfterAgent` (and `Shopifex.RedirectAfter.Ecto`) now store
+  opaque signed charge-binding strings, not raw redirect URLs — a custom
+  `:redirect_after_agent` implementation must round-trip whatever
+  `bind_charge/4` hands it, not assume a plain string.
+- **`use_grant/2` (`Shopifex.PaymentGuard`) may return `nil`.** The default
+  implementation now decrements `remaining_usages` atomically and returns
+  `nil` when 0 rows were updated (the grant was already exhausted, e.g. a
+  race between two requests); `Shopifex.Plug.PaymentGuard` treats that the
+  same as no grant and redirects to the plan picker. Custom `use_grant/2`
+  overrides must handle a `nil` return. `grant_for_guard/2` now prefers an
+  unlimited grant (`remaining_usages == nil`) over a metered one when both
+  unlock the same guard.
+- **`Shopifex.Plug.EnsureScopes` defaults to `:raise`, not a redirect.** On a
+  scope mismatch it now raises an actionable error pointing at managed-install
+  app config instead of bouncing the merchant through legacy OAuth. Opt back
+  into the 2.x redirect with
+  `plug Shopifex.Plug.EnsureScopes, on_missing_scopes: :redirect` (or
+  `config :shopifex, :ensure_scopes_on_missing, :redirect`).
+- **`Shopifex.API.graphql/3` has a new error shape.** A *terminal* token
+  refresh failure (expired/missing refresh token, a 400/401 from Shopify's
+  token endpoint, or shop not found) now returns
+  `{:error, {:token_refresh_failed, reason}}` instead of a generic
+  `{:error, {401, body}}` or crashing the request.
+- **Generated Grant/Plan schemas changed nullability.** `mix shopifex.install`
+  now generates `Grant.charge_id`, `Grant.remaining_usages`, and `Plan.usages`
+  as nullable (unlimited plans have no usage cap; `create_shop_grant/2` never
+  supplies a `charge_id`), and `Grant.charge_id` is `:bigint` (Shopify charge
+  ids exceed Postgres `int4`). Apps that regenerate schemas with
+  `mix shopifex.install` should review their existing migrations.
 
 ### Security
 
+- HMAC comparisons use constant-time `Plug.Crypto.secure_compare/2` everywhere
+  (`ValidateHmac`, `ShopifyWebhook`, `ShopifySession`), and computed HMAC values
+  are no longer logged on failure.
+- Webhook Base64 HMACs are compared case-sensitively (no longer lowercased),
+  matching Shopify JS/Ruby.
+- Query / app-proxy HMAC parameters are signed in explicit alphabetical order.
+- Query / app-proxy requests with a `timestamp` are rejected outside a
+  90-second tolerance (`config :shopifex, :hmac_timestamp_tolerance_seconds`),
+  via the shared `Shopifex.Plug.validate_timestamp/2` helper. The initial
+  `/auth` session request (`Shopifex.Plug.ShopifySession`) now runs this same
+  check, so a stale `timestamp` on an admin-load request is rejected too when
+  one is present (still not required there, unlike `:shopify_proxy`).
+- **`Shopifex.Plug.ShopifySession` reads `shop` from the HMAC-signed query
+  params, not the request params.** A POST body `shop` can no longer override
+  the signed value used to look up and build the session.
+- **`initialize_installation` validates the shop domain with an anchored
+  pattern** (`Shopifex.ShopDomain.valid?/1`) instead of an unanchored regex,
+  closing an open-redirect vector (a crafted `shop` value could previously
+  pass a loose `.myshopify.com` substring check and redirect off-domain).
+- **App-proxy requests now require a `timestamp`.** The `:shopify_proxy`
+  pipeline passes `ValidateHmac, require_timestamp: true`, closing a replay
+  window where a signed proxy URL without a timestamp was valid forever.
+  Admin-load / bulk-action links (which may legitimately omit it) are
+  unaffected.
+- **CSP `frame-ancestors` no longer interpolates an unvalidated shop host.**
+  `Shopifex.Plug.SetCSPHeader` now only adds the shop origin when the stored
+  URL is a bare hostname, and adds its header alongside any existing CSP
+  instead of replacing it, so a malformed/tampered URL can't inject extra
+  directives.
+- **Webhook dispatch fails closed on a missing/duplicate `x-shopify-topic`
+  header** (`400`) instead of raising a `MatchError` (`500`).
 - **Fixed a cross-tenant grant bypass in `PaymentGuard`.** The default
-  `grant_for_guard/2` and `grants_for_shop/1` queries combined their filters with
-  `where` + `or_where`, which Ecto OR-ed against the *whole* clause — the
+  `grant_for_guard/2` and `grants_for_shop/1` queries combined their filters
+  with `where` + `or_where`, which Ecto OR-ed against the *whole* clause — the
   `remaining_usages > 0` branch dropped the `shop_id`/`guard` filters, so any
   shop's metered grant could satisfy another shop's payment check (and the OR
   branch could not use an index). The predicates are now AND-ed, with the `or`
-  confined to the two `remaining_usages` alternatives. Regression tests assert a
-  metered grant on one shop never leaks to another.
-- **App-proxy requests now require a `timestamp`.** The `:shopify_proxy` pipeline
-  passes `ValidateHmac, require_timestamp: true`, closing a replay window where a
-  signed proxy URL without a timestamp was valid forever. Admin-load / bulk-action
-  links (which may legitimately omit it) are unaffected.
-- **CSP `frame-ancestors` no longer interpolates an unvalidated shop host.**
-  `Shopifex.Plug.SetCSPHeader` now only adds the shop origin when the stored URL
-  is a bare hostname, so a malformed/tampered URL can't inject extra directives.
-- **Webhook dispatch fails closed on a missing/duplicate `x-shopify-topic`
-  header** (`400`) instead of raising a `MatchError` (`500`).
+  confined to the two `remaining_usages` alternatives.
+- **Secret rotation.** Set `config :shopifex, :old_secret` to have webhook /
+  app-proxy / session HMAC verification, session-token (`id_token`)
+  verification, and the billing charge-binding signature accept the previous
+  secret as well, so rotating the app secret doesn't drop in-flight webhooks,
+  sessions, or an in-progress billing round-trip.
+- **LiveView session no longer carries the shop's tokens.**
+  `ShopifexWeb.LiveSession.put_shop_in_session/1` now serializes only the shop
+  **URL** (not the `current_shop` struct), and `on_mount` reloads the shop
+  server-side. The LV session is signed but not encrypted (readable
+  client-side), so the old behavior exposed `access_token` / `refresh_token`.
 
 ### Added
 
-- **Cross-node refresh-token leases.** `Shopifex.Auth.refresh!/1` now serializes
-  one-time-use refresh tokens through the dedicated
-  `shopifex_token_refresh_leases` table. Fresh installer migrations include the
-  table; existing Shopifex 3 consumers must add the documented migration.
+- `Shopifex.Auth` — background offline-token refresh: proactive refresh
+  within a 5-minute safety window (`fresh_token/1`), reactive refresh on a
+  401, and cross-node concurrency safety via a dedicated
+  `shopifex_token_refresh_leases` table (one-time-use refresh tokens can't be
+  refreshed concurrently without it). The outbound Shopify request holds
+  neither a database connection nor a lock on the consumer's shop row; only a
+  short final transaction (`SELECT ... FOR UPDATE`) re-checks token fields
+  before persisting, so a concurrent managed-install exchange is never
+  overwritten. Fresh installer migrations include the leases table; existing
+  Shopifex 3 consumers must add the documented migration.
+- **`Shopifex.Auth.fresh_token/1`** — public, returns `{:ok, shop} | {:error, reason}`
+  (distinct from `ensure_fresh_token/1`, which always returns a shop and
+  swallows the error). `Shopifex.Auth.terminal_refresh_error?/1` classifies a
+  refresh failure as terminal (`:refresh_token_expired`, `:no_refresh_token`,
+  `:shop_not_found`, `{:refresh_failed, 400 | 401}`) or transient (worth
+  retrying with the shop's current token).
+- **`{:error, :refresh_token_expired}`** — `Shopifex.Auth.refresh!/1` now checks
+  the stored `refresh_token_expires_at` (with a 60s skew) before contacting
+  Shopify, turning a doomed round-trip into an immediate, specific failure. A
+  `nil` expiry is never treated as expired, so legacy installs are unaffected.
+  Token-expiry predicates throughout `Shopifex.Auth` and
+  `Shopifex.Plug.ManagedInstall` accept both `DateTime` and `NaiveDateTime`
+  columns.
+- **Refresh retries on transient failures.** The refresh-token grant retries
+  a request that times out or returns 408/429/500/502/503/504 up to 2 times
+  with the *same* refresh token — the behaviour Shopify documents as
+  returning the same rotated credentials rather than issuing another pair.
+  Req's built-in `retry: :transient` can't be used here (it mishandles a
+  float `Retry-After` value, which Shopify sends); a dedicated retry function
+  honours `Retry-After` in integer or float seconds, capped at 5s per delay.
+  A terminal 400/401 is not retried, so a genuinely spent refresh token still
+  fails immediately. Each attempt uses a 5s connect / 10s receive timeout.
+  Override via `config :shopifex, :req_options`.
+- `Shopifex.API` — single GraphQL Admin API transport with a configurable
+  `api_version` (default `2026-07`) and errors-take-precedence handling.
+- `Shopifex.SessionToken` — strict HS256 verification of App Bridge session
+  tokens, with `:expired` distinct from other errors.
+- `Shopifex.Plug.ShopifyApiAuth` — session-token auth for the API pipelines.
+- Token-lifecycle columns on the shop schema (`token_expires_at`,
+  `refresh_token`, `refresh_token_expires_at`; `scope` now nullable), all
+  additive and nullable so legacy / non-expiring installs round-trip.
+- **Managed installation is the default embedded auth flow.** `auth_routes/1`
+  now pipes `/auth` through `[:shopifex_browser, :managed_install,
+  :shopify_session]`, so generated apps run token exchange out of the box.
+  `Shopifex.Plug.ManagedInstall` verifies `id_token`, requests **expiring**
+  tokens (`expiring=1`), persists the full token lifecycle, and re-exchanges
+  when the stored `token_expires_at` is within ~10 minutes of expiry.
+- `Shopifex.ManagedInstall.Callbacks` — configurable `insert_shop/1`,
+  `after_install/1` (first install only), and `after_exchange/2` (every
+  exchange — install **and** refresh, with a `new?` flag) hooks for the
+  managed-install path (`config :shopifex, managed_install_callbacks:
+  MyApp.Callbacks`). Callbacks run synchronously in the request — spawn a
+  `Task` for slow work. The legacy `AuthController.after_install/3` /
+  `insert_shop/1` callbacks apply only to the OAuth controller flow.
+- `Shopifex.Plug.session_token/1` now also reads the `id_token` query parameter
+  (in addition to `token` and `Authorization: Bearer`), and
+  `Shopifex.Plug.ShopifySession` yields to a shop already loaded by
+  `ManagedInstall` instead of re-authenticating.
+- Default GDPR webhook handlers in `ShopifexWeb.WebhookController`
+  (`customers/data_request`, `customers/redact`, `shop/redact`), overridable.
+- `appPurchaseOneTimeCreate` support for one-time charges. `create_charge/2` is
+  public and overridable, and the recurring mutation accepts optional
+  `replacement_behavior`, `discount`, `currency_code`, and `line_items`
+  (multiple items / usage pricing) from plan data. The new `verify_charge/3`
+  callback checks the charge's status with Shopify before `complete_payment/2`
+  creates a `Grant` (`AppSubscription` ACTIVE/ACCEPTED, `AppPurchaseOneTime`
+  ACTIVE).
+- `docs/parity-matrix.md` — behavior parity matrix vs Shopify JS and Ruby.
+  `docs/upgrading.md` — step-by-step 2.x → 3.0 upgrade guide.
+- `Shopifex.Test` — public test helpers (ships in the package) for forging the
+  tokens/HMACs Shopifex verifies: `sign_session_token/2`, `put_shopify_session/3`,
+  `sign_webhook/2`, `put_webhook_hmac/3`, `sign_query_hmac/2`. Lets consuming apps
+  test controllers/LiveViews behind the `:shopify_*` pipelines without Shopify.
+- `Shopifex.Plug.ShopifyApiAuth` now sets `x-shopify-retry-invalid-session-request: 1`
+  on its `401`, so App Bridge's `authenticatedFetch` transparently retries with a
+  fresh `id_token` (embedded tokens live ~60s) instead of surfacing the error.
+- `jose` is now an explicit dependency.
+- `Shopifex.RedirectAfter.Ecto` — a persistent, multi-node-safe implementation of
+  the `Shopifex.RedirectAfterAgent` behaviour, backed by a `shopifex_charge_redirects`
+  table (no supervised process to add). Configure with
+  `config :shopifex, :redirect_after_agent, Shopifex.RedirectAfter.Ecto`;
+  `mix shopifex.install` generates the config + migration for new apps. Use it
+  instead of the in-memory default whenever the app runs on more than one node.
+- **`config :shopifex, :configure_webhooks_on_exchange?`** (default `true`) —
+  set `false` to skip the idempotent webhook reconcile on every token
+  re-exchange (first install still registers). Set `:webhook_topics` to `[]`
+  to disable Shopifex webhook registration entirely (e.g. TOML-managed
+  webhooks) — `configure_webhooks/1` then makes no GraphQL call at all,
+  rather than fetching current subscriptions to reconcile against nothing.
 - **`Shopifex.Plug.ValidateHmac, require_timestamp: true`** — a per-plug option
-  that rejects any signed request lacking a `timestamp` (default `false` keeps the
-  existing "missing timestamp is allowed" behavior for non-proxy flows).
+  that rejects any signed request lacking a `timestamp` (default `false` keeps
+  the existing "missing timestamp is allowed" behavior for non-proxy flows).
 - **`Shopifex.Plug.LoadProxyShop`** — resolves the shop from a verified app-proxy
   request's signed `shop` param and exposes it via `Shopifex.Plug.current_shop/1`.
-  Now included by default in the `:shopify_proxy` pipeline (after `ValidateHmac`),
+  Included by default in the `:shopify_proxy` pipeline (after `ValidateHmac`),
   so proxy controllers get `current_shop` without a bespoke plug. Pass
   `on_missing: :halt` to reject unknown shops with `401` (default `:pass` is
   non-breaking — `current_shop` is simply `nil`).
@@ -46,18 +239,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `timestamp_tolerance_seconds` plug option that overrides the global
   `config :shopifex, :hmac_timestamp_tolerance_seconds`, so an app-proxy pipeline
   can allow more clock/lag drift without widening the admin-load replay window.
-- **`config :shopifex, :configure_webhooks_on_exchange?`** (default `true`) — set
-  `false` to skip the idempotent webhook reconcile on every token re-exchange
-  (first install still registers). To disable Shopifex webhook registration
-  entirely (e.g. TOML-managed webhooks), set `:webhook_topics` to `[]`.
+- Legacy OAuth `install/2` and `update/2` send the authorization-code grant
+  form-encoded with `expiring=1` and persist `token_expires_at` /
+  `refresh_token_expires_at` via the same `Shopifex.TokenResponse.shop_attrs/2`
+  helper the managed-install exchange uses, so legacy-flow shops also get the
+  full token lifecycle. The default `AuthController.auth/2` forwards the
+  complete signed query (not just embedded-context params) when no `id_token`
+  is present, so a legacy non-embedded landing route still has an HMAC to
+  re-verify.
 
 ### Fixed
 
+- **`Shopifex.Plug.FetchFlash` works on Phoenix 1.8.** It now delegates to
+  `Phoenix.Controller.fetch_flash/2` — on Phoenix 1.7+ the plug it wrapped was
+  a no-op and a subsequent `put_flash` raised.
+- **`Shopifex.Plug.PaymentGuard` no longer needs `Router.Helpers`**, so it
+  works with `helpers: false` routers. It builds the plan-picker redirect from
+  `path_prefix` and `URI.encode_query/1` instead of a generated route helper.
+- **Non-integer `charge_id` values respond `403` instead of crashing.**
+  `complete_payment/2` parses `charge_id` with `Integer.parse/1` and rejects a
+  non-integer value the same way as any other unverifiable confirmation,
+  rather than raising.
 - **Token refresh no longer performs Shopify HTTP inside a `SELECT … FOR UPDATE`
   transaction.** The outbound request now holds neither the consumer's shop row
   lock nor a database connection. A short final transaction re-checks token
   fields before persisting, preventing a concurrent managed-install exchange
   from being overwritten.
+- **Legacy OAuth `install/2` and `update/2` are testable again.** Both were the
+  only `Req.post` call sites that did not append
+  `Application.get_env(:shopifex, :req_options, [])`, so the authorization-code
+  grant could not be stubbed and had no test coverage at all — including the
+  `String.to_atom/1` whitelist fix below. They now follow the same pattern as
+  `Shopifex.Auth`, `Shopifex.API`, and `Shopifex.Plug.ManagedInstall`, and are
+  covered by tests for the success path, a rejected code, token rotation on
+  update, and the response whitelist.
 - **`complete_payment/2` no longer 500s on a redirect-cache miss.** It now
   responds `403` (a `Plug.Conn`) instead of returning a bare `{:error, :forbidden}`
   tuple, which raised unless the app had wired an `action_fallback`.
@@ -73,128 +288,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `grants` table only had a GIN index on `grants`; `grant_for_guard/2` filters by
   `shop_id` on every guarded request, so a plain btree index is now emitted (the
   migration generator gained an `:index` index type).
-- **`ShopifexWeb` docs/aliases dropped their v2 leftovers.** The moduledoc no
-  longer advertises `use ShopifexWeb, :view` (there was no `view/0` clause — it
-  raised `UndefinedFunctionError`), and `controller/0` no longer injects the dead
-  `alias _.Router.Helpers, as: Routes` (which also shadowed `ShopifexWeb.Routes`).
-
-### Changed
-
-- The default Shopify Admin GraphQL API version is now `2026-07`. Shopifex's
-  webhook and billing operations were validated against the 2026-07 schema
-  without query changes.
-- **`postgrex` is now a `:dev`/`:test`-only dependency.** The library never calls
-  Postgrex directly (only the test dummy repo does); downstream apps already bring
-  their own driver.
-- **`cors_plug` constraint widened to `~> 2.0 or ~> 3.0`** so downstream apps
-  aren't pinned to the 2.x line.
-- Removed orphaned `mix.lock` entries (`jsx`, `exjsx`, `meck`) left over from the
-  dropped `exvcr` test dependency.
-
-## [3.0.0]
-
-Modernization release: Shopify 2026 compliance, a Guardian-free embedded auth
-model, and a Phoenix 1.8 / function-component baseline.
-
-Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
-(minimum supported: Elixir 1.15, Phoenix 1.8).
-
-### Breaking changes
-
-- **Minimum Elixir 1.15 and Phoenix 1.8.** Dropped `phoenix_view`,
-  `phoenix_html_helpers`, and `plug_cowboy` — the library no longer pins a web
-  server (Bandit is the Phoenix 1.8 default) or the legacy view stack.
-- **View layer is function components.** `Phoenix.View` modules + `.eex`
-  templates were replaced by `*HTML` modules with co-located `.heex`
-  templates. If you rendered Shopifex views directly, update to
-  `put_view(ShopifexWeb.PaymentHTML)` / `render("show_plans.html", ...)`.
-- **Guardian removed.** Embedded auth no longer mints an app JWT. Session
-  tokens (`id_token`) are verified directly by `Shopifex.SessionToken`.
-  `Shopifex.Plug.build_session/4` no longer sets a Guardian token; the
-  `:shopify_api` / `:shopifex_api` pipelines now use
-  `Shopifex.Plug.ShopifyApiAuth`. `AuthController.auth/2` and
-  `PaymentController` redirect to the app root instead of appending `?token=`.
-- **Webhooks and billing are GraphQL.** REST webhook (`webhooks.json`) and
-  charge (`recurring_application_charges` / `application_charges`) endpoints
-  were removed, along with the `neuron` dependency. Topics returned by
-  `Shopifex.Shops.get_current_webhooks/1` are now GraphQL enums.
-- **Embedded payment routes are the default.** `payment_routes/2` defaults to
-  the CSP-protected embedded pipeline; pass `shopify_embedded: false` to opt
-  out.
-
-### Added
-
-- `Shopifex.Auth` — background offline-token refresh (proactive 5-minute
-  window, reactive-on-401, `SELECT … FOR UPDATE` per-shop concurrency lock).
-- `Shopifex.API` — single GraphQL Admin API transport with a configurable
-  `api_version` (default `2026-04`) and errors-take-precedence handling.
-- `Shopifex.SessionToken` — strict HS256 verification of App Bridge session
-  tokens, with `:expired` distinct from other errors.
-- `Shopifex.Plug.ShopifyApiAuth` — session-token auth for the API pipelines.
-- Token-lifecycle columns on the shop schema (`token_expires_at`,
-  `refresh_token`, `refresh_token_expires_at`; `scope` now nullable), all
-  additive and nullable so legacy / non-expiring installs round-trip.
-- **Managed installation is the default embedded auth flow.** `auth_routes/1`
-  now pipes `/auth` through `[:shopifex_browser, :managed_install,
-  :shopify_session]`, so generated apps run token exchange out of the box.
-  `Shopifex.Plug.ManagedInstall` verifies `id_token`, requests **expiring**
-  tokens (`expiring=1`), persists the full token lifecycle, and re-exchanges on
-  a 50-minute staleness window.
-- `Shopifex.ManagedInstall.Callbacks` — configurable `insert_shop/1`,
-  `after_install/1` (first install only), and `after_exchange/2` (every exchange —
-  install **and** refresh, with a `new?` flag) hooks for the managed-install path
-  (`config :shopifex, managed_install_callbacks: MyApp.Callbacks`). Callbacks run
-  synchronously in the request — spawn a `Task` for slow work. The legacy
-  `AuthController.after_install/3` / `insert_shop/1` callbacks apply only to the
-  OAuth controller flow.
-- `Shopifex.Plug.session_token/1` now also reads the `id_token` query parameter
-  (in addition to `token` and `Authorization: Bearer`), and
-  `Shopifex.Plug.ShopifySession` yields to a shop already loaded by
-  `ManagedInstall` instead of re-authenticating.
-- Default GDPR webhook handlers in `ShopifexWeb.WebhookController`
-  (`customers/data_request`, `customers/redact`, `shop/redact`), overridable.
-- `appPurchaseOneTimeCreate` support for one-time charges. `create_charge/2` is
-  now public and overridable, and the recurring mutation accepts optional
-  `replacement_behavior`, `discount`, `currency_code`, and `line_items`
-  (multiple items / usage pricing) from plan data.
-- `docs/parity-matrix.md` — behavior parity matrix vs Shopify JS and Ruby.
-- `Shopifex.Test` — public test helpers (ships in the package) for forging the
-  tokens/HMACs Shopifex verifies: `sign_session_token/2`, `put_shopify_session/3`,
-  `sign_webhook/2`, `put_webhook_hmac/3`, `sign_query_hmac/2`. Lets consuming apps
-  test controllers/LiveViews behind the `:shopify_*` pipelines without Shopify.
-- `Shopifex.Plug.ShopifyApiAuth` now sets `x-shopify-retry-invalid-session-request: 1`
-  on its `401`, so App Bridge's `authenticatedFetch` transparently retries with a
-  fresh `id_token` (embedded tokens live ~60s) instead of surfacing the error.
-- `jose` is now an explicit dependency.
-- `Shopifex.RedirectAfter.Ecto` — a persistent, multi-node-safe implementation of
-  the `Shopifex.RedirectAfterAgent` behaviour, backed by a `shopifex_charge_redirects`
-  table (no supervised process to add). Configure with
-  `config :shopifex, :redirect_after_agent, Shopifex.RedirectAfter.Ecto`;
-  `mix shopifex.install` generates the config + migration. Use it instead of the
-  in-memory default whenever the app runs on more than one node.
-
-### Security
-
-- HMAC comparisons use constant-time `Plug.Crypto.secure_compare/2` everywhere
-  (`ValidateHmac`, `ShopifyWebhook`, `ShopifySession`), and computed HMAC values
-  are no longer logged on failure.
-- Webhook Base64 HMACs are compared case-sensitively (no longer lowercased),
-  matching Shopify JS/Ruby.
-- Query / app-proxy HMAC parameters are signed in explicit alphabetical order.
-- Query / app-proxy requests with a `timestamp` are rejected outside a 90-second
-  tolerance (`config :shopifex, :hmac_timestamp_tolerance_seconds`).
-- **Secret rotation.** Set `config :shopifex, :old_secret` to have webhook /
-  app-proxy / session HMAC verification and session-token (`id_token`)
-  verification accept the previous secret as well, so rotating the app secret
-  doesn't drop in-flight webhooks or sessions.
-- **LiveView session no longer carries the shop's tokens.**
-  `ShopifexWeb.LiveSession.put_shop_in_session/1` now serializes only the shop
-  **URL** (not the `current_shop` struct), and `on_mount` reloads the shop
-  server-side. The LV session is signed but not encrypted (readable client-side),
-  so the old behavior exposed `access_token` / `refresh_token`.
-
-### Fixed
-
+- **`mix shopifex.install`'s generated Grant schema compiles.** It previously
+  emitted an invalid `field :shop_id, {:references, ...}`. The generated
+  migration also creates `shopifex_charge_redirects`, and the grants→shops
+  foreign key is `on_delete: :delete_all`.
+- **Managed-install token refresh is driven by token expiry, not `updated_at`.**
+  `Shopifex.Plug.ManagedInstall` now re-exchanges the offline access token when
+  `token_expires_at` is within ~10 minutes of expiry (consistent with
+  `Shopifex.Auth`), instead of when the shop row's `updated_at` aged past 50
+  minutes — an unrelated update to the shop row no longer masks an expired token.
 - **Macro billing flow now creates the grant.** `Shopifex.RedirectAfterAgent`
   `set/2` and `get/1` disagreed on key type (string vs integer), so the
   charge-id keyed lookup in `complete_payment/2` missed and the `Grant` was never
@@ -206,33 +308,23 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
   but no `Grant` was created, **silently**. Two changes fix this: (1)
   `Shopifex.RedirectAfter.Ecto` is a shipped, DB-backed implementation that is
   safe across nodes (see Added), and `mix shopifex.install` now generates it as
-  the default for new apps; (2) when the lookup misses, `complete_payment/2` logs
-  an actionable `Logger.error` instead of returning a silent `{:error,
-  :forbidden}`, so a misconfigured single-node store on a redundant deploy is
-  observable rather than invisible.
-- **Managed-install token refresh is driven by token expiry, not `updated_at`.**
-  `Shopifex.Plug.ManagedInstall` now re-exchanges the offline access token when
-  `token_expires_at` is within ~10 minutes of expiry (consistent with
-  `Shopifex.Auth`), instead of when the shop row's `updated_at` aged past 50
-  minutes — an unrelated update to the shop row no longer masks an expired token.
+  the default for new apps; (2) when the lookup misses, `complete_payment/2`
+  logs an actionable `Logger.error` instead of failing silently.
 
 ### Changed
 
+- The default Shopify Admin GraphQL API version is `2026-07`
+  (`config :shopifex, :api_version`).
 - **Billing mutations no longer send `@idempotent`.** Shopify does not document
   the directive for `appSubscriptionCreate` / `appPurchaseOneTimeCreate`, and the
   official JS/Ruby libraries omit it. Recurring line items are passed as a
   `$lineItems` GraphQL variable rather than interpolated into the query.
-- **`Shopifex.Plug.EnsureScopes` no longer redirects to OAuth by default.** On a
-  scope mismatch it now raises an actionable error pointing at managed-install
-  app config. Opt back into the legacy redirect with
-  `plug Shopifex.Plug.EnsureScopes, on_missing_scopes: :redirect` (or
-  `config :shopifex, :ensure_scopes_on_missing, :redirect`).
 - **Webhook subscriptions self-heal.** `Shopifex.Plug.ManagedInstall` now
   reconciles webhooks (idempotent `configure_webhooks/1`) on existing-shop token
   re-exchanges, not just first install — recovering from a registration that
   failed at install or topics added to `:webhook_topics` later. It runs at the
-  token-exchange cadence (≤ the 50-minute staleness window), never on the hot
-  per-load path.
+  token-exchange cadence (at the same ~10-minute-before-expiry cadence as the
+  token refresh itself), never on the hot per-load path.
 - **Built-in pages use the Shopify-hosted App Bridge + Polaris web components.**
   The auth / payment / redirect pages now load App Bridge and Polaris from
   `cdn.shopify.com` with a `<meta name="shopify-api-key">` tag, and are rendered
@@ -240,7 +332,13 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
   `@shopify/app-bridge@3` + Polaris 4/7 bundle (`assets/`, `priv/static/`) was
   removed, so apps **no longer need** the `Plug.Static at: "/shopifex-assets"`
   endpoint entry. The `mix shopifex.install` task no longer prints it.
-- Tests use `Req.Test` stubs; `exvcr` and its cassettes were removed.
+- **`postgrex` is now a `:dev`/`:test`-only dependency.** The library never calls
+  Postgrex directly (only the test dummy repo does); downstream apps already bring
+  their own driver.
+- **`cors_plug` constraint widened to `~> 2.0 or ~> 3.0`** so downstream apps
+  aren't pinned to the 2.x line.
+- Tests use `Req.Test` stubs; `exvcr` and its cassettes were removed, along
+  with orphaned `mix.lock` entries (`jsx`, `exjsx`, `meck`) left over from it.
 
 ## [2.0.1] - 2021-08-25
 
@@ -259,6 +357,6 @@ Verified on Elixir 1.20 / OTP 29, Phoenix 1.8.8, Phoenix LiveView 1.2.1
 
 - Move `show_plans` optional callback from `Shopifex.PaymentGuard` behaviour to `render_plans` in `ShopifexWeb.PaymentController` behavour
 
-[unreleased]: https://github.com/ericdude4/shopifex/compare/v2.0.1...HEAD
+[3.0.0]: https://github.com/josefrichter/shopifex/compare/v2.0.1...modern-shopifex
 [2.0.1]: https://github.com/ericdude4/shopifex/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/ericdude4/shopifex/compare/v1.1.1...v2.0.0

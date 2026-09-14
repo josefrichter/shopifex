@@ -1,20 +1,33 @@
 defmodule ShopifexWeb.PaymentController do
   @moduledoc """
-  You can use this module inside of another controller to handle initial iFrame load and shop installation
+  Controller behaviour for Shopify billing, plan selection, and charge verification.
 
-  Example:
-
-  mix phx.gen.html Shops Plan plans name:string price:string features:array grants:array test:boolean
-  mix phx.gen.html Shops Grant grants shop:references:shops charge_id:integer grants:array
+  Use this module inside your application's payment controller:
 
   ```elixir
   defmodule MyAppWeb.PaymentController do
     use MyAppWeb, :controller
     use ShopifexWeb.PaymentController
-
-    # Thats it! You can now configure your purchasable products :)
   end
   ```
+
+  ### Billing Flow
+
+  1. Merchant hits a pay-walled action guarded by `Shopifex.Plug.PaymentGuard`.
+  2. If no valid grant exists, the merchant is redirected to `/payment/show-plans`.
+  3. Selecting a plan sends a POST to `/payment/select-plan`, which creates a Shopify
+     charge (`appSubscriptionCreate` or `appPurchaseOneTimeCreate`) and binds the charge
+     cryptographically via `bind_charge/4`.
+  4. The merchant approves the charge in Shopify and is redirected back to `/payment/complete`.
+  5. `complete_payment/2` validates the signed charge binding, verifies that the charge is
+     active in Shopify via `verify_charge/3`, creates the `Grant` record, and invokes
+     `after_payment/5`.
+
+  ### Custom Select-Plan Actions
+
+  If your application defines a custom action to initiate charges (instead of the standard
+  `select_plan/2`), you must call `ShopifexWeb.PaymentController.bind_charge/4` before
+  redirecting the merchant to Shopify's confirmation URL.
   """
 
   @doc """
@@ -54,7 +67,67 @@ defmodule ShopifexWeb.PaymentController do
   """
   @callback test_charge?(shop :: Ecto.Schema.t(), plan :: map()) :: boolean()
 
-  @optional_callbacks render_plans: 3, after_payment: 5, test_charge?: 2
+  @doc """
+  Creates a charge in Shopify for the given plan.
+  """
+  @callback create_charge(
+              shop :: map(),
+              plan :: map()
+            ) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  Verifies that the charge has been approved and is active in Shopify before granting access.
+  """
+  @callback verify_charge(
+              shop :: map(),
+              plan :: map(),
+              charge_id :: String.t() | integer()
+            ) :: :ok | {:error, term()}
+
+  @optional_callbacks render_plans: 3,
+                      after_payment: 5,
+                      test_charge?: 2,
+                      create_charge: 2,
+                      verify_charge: 3
+
+  @doc """
+  Cryptographically binds a pending charge to `{shop, plan, redirect_after}` and
+  stores it under `charge_id` in the configured `:redirect_after_agent`.
+
+  Custom `select_plan` actions must call this function before redirecting the
+  merchant to Shopify's confirmation URL.
+  """
+  @spec bind_charge(
+          shop :: map(),
+          plan :: map(),
+          charge_id :: String.t() | integer(),
+          redirect_after :: String.t()
+        ) :: :ok
+  def bind_charge(shop, plan, charge_id, redirect_after) do
+    redirect_after_agent =
+      Application.get_env(:shopifex, :redirect_after_agent, Shopifex.RedirectAfterAgent)
+
+    signed_binding =
+      Shopifex.ChargeBinding.sign(%{
+        shop_url: Shopifex.Shops.get_url(shop),
+        plan_id: to_string(plan.id),
+        redirect_after: redirect_after
+      })
+
+    redirect_after_agent.set(charge_id, signed_binding)
+  end
+
+  @doc false
+  # `create_charge/2` (via `Shopifex.API.graphql/3`) can fail with a GraphQL
+  # `userErrors` list/map, a `{status, body}` tuple, a `%Req.TransportError{}`,
+  # or a `{:token_refresh_failed, reason}` tuple. Only the first is
+  # JSON-encodable as-is; everything else must be normalised before
+  # `Jason.encode!/1` or the 422 response itself would crash with a 500.
+  @spec normalize_charge_errors(term()) :: list() | map()
+  def normalize_charge_errors(errors) when is_list(errors), do: errors
+  def normalize_charge_errors(%_{} = reason), do: [%{"message" => inspect(reason)}]
+  def normalize_charge_errors(errors) when is_map(errors), do: errors
+  def normalize_charge_errors(reason), do: [%{"message" => inspect(reason)}]
 
   defmacro __using__(_opts) do
     quote do
@@ -78,18 +151,25 @@ defmodule ShopifexWeb.PaymentController do
 
       def select_plan(conn, %{"plan_id" => plan_id, "redirect_after" => redirect_after}) do
         payment_guard = Application.fetch_env!(:shopifex, :payment_guard)
-
-        redirect_after_agent =
-          Application.get_env(:shopifex, :redirect_after_agent, Shopifex.RedirectAfterAgent)
-
         plan = payment_guard.get_plan(plan_id)
         shop = Shopifex.Plug.current_shop(conn)
 
-        {:ok, charge} = create_charge(shop, plan)
+        case create_charge(shop, plan) do
+          {:ok, charge} ->
+            ShopifexWeb.PaymentController.bind_charge(shop, plan, charge["id"], redirect_after)
+            send_resp(conn, 200, Jason.encode!(charge))
 
-        redirect_after_agent.set(charge["id"], redirect_after)
-
-        send_resp(conn, 200, Jason.encode!(charge))
+          {:error, errors} ->
+            conn
+            |> put_status(422)
+            |> put_resp_header("content-type", "application/json")
+            |> send_resp(
+              422,
+              Jason.encode!(%{
+                "errors" => ShopifexWeb.PaymentController.normalize_charge_errors(errors)
+              })
+            )
+        end
       end
 
       @impl ShopifexWeb.PaymentController
@@ -126,6 +206,7 @@ defmodule ShopifexWeb.PaymentController do
 
       Overridable — define your own `create_charge/2` to customise pricing.
       """
+      @impl ShopifexWeb.PaymentController
       def create_charge(shop, %{type: "recurring_application_charge"} = plan) do
         mutation = """
         mutation appSubscriptionCreate($name: String!, $returnUrl: URL!, $test: Boolean!, $trialDays: Int!, $lineItems: [AppSubscriptionLineItemInput!]!, $replacementBehavior: AppSubscriptionReplacementBehavior) {
@@ -231,8 +312,6 @@ defmodule ShopifexWeb.PaymentController do
                "confirmationUrl" => confirmation_url
              }
            }} ->
-            # gid is "gid://shopify/AppSubscription/4019552312" — Shopify sends
-            # the trailing numeric id back as the `charge_id` return-url param.
             {:ok,
              %{"id" => List.last(String.split(gid, "/")), "confirmation_url" => confirmation_url}}
 
@@ -244,63 +323,198 @@ defmodule ShopifexWeb.PaymentController do
         end
       end
 
+      @impl ShopifexWeb.PaymentController
+      def verify_charge(shop, %{type: "recurring_application_charge"}, charge_id) do
+        query = """
+        query appSubscriptionStatus($id: ID!) {
+          node(id: $id) {
+            ... on AppSubscription {
+              status
+            }
+          }
+        }
+        """
+
+        variables = %{id: "gid://shopify/AppSubscription/#{charge_id}"}
+
+        case Shopifex.API.graphql(shop, query, variables) do
+          {:ok, %{"node" => %{"status" => status}}} when status in ["ACTIVE", "ACCEPTED"] ->
+            :ok
+
+          {:ok, %{"node" => %{"status" => status}}} ->
+            {:error, {:unexpected_status, status}}
+
+          {:ok, %{"node" => nil}} ->
+            {:error, :not_found}
+
+          {:error, reason} ->
+            {:error, reason}
+
+          other ->
+            {:error, other}
+        end
+      end
+
+      def verify_charge(shop, %{type: "application_charge"}, charge_id) do
+        query = """
+        query appPurchaseOneTimeStatus($id: ID!) {
+          node(id: $id) {
+            ... on AppPurchaseOneTime {
+              status
+            }
+          }
+        }
+        """
+
+        variables = %{id: "gid://shopify/AppPurchaseOneTime/#{charge_id}"}
+
+        case Shopifex.API.graphql(shop, query, variables) do
+          {:ok, %{"node" => %{"status" => "ACTIVE"}}} ->
+            :ok
+
+          {:ok, %{"node" => %{"status" => status}}} ->
+            {:error, {:unexpected_status, status}}
+
+          {:ok, %{"node" => nil}} ->
+            {:error, :not_found}
+
+          {:error, reason} ->
+            {:error, reason}
+
+          other ->
+            {:error, other}
+        end
+      end
+
+      def verify_charge(_shop, plan, _charge_id) do
+        {:error, {:unknown_plan_type, Map.get(plan, :type)}}
+      end
+
       def complete_payment(conn, %{
-            "charge_id" => charge_id,
-            "plan_id" => plan_id,
+            "charge_id" => raw_charge_id,
+            "plan_id" => raw_plan_id,
             "shop" => shop_url
           }) do
         redirect_after_agent =
           Application.get_env(:shopifex, :redirect_after_agent, Shopifex.RedirectAfterAgent)
 
-        # Shopify's API doesn't provide an HMAC validation on this return-url.
-        # The redirect-after entry stored against this charge_id at `select_plan`
-        # time doubles as the anti-forgery check: no entry => we never started
-        # this charge here, so reject.
-        case redirect_after_agent.get(charge_id) do
-          nil ->
-            # A missing entry is *expected* to mean forgery — but with the default
-            # in-memory Shopifex.RedirectAfterAgent it also happens, legitimately,
-            # whenever Shopify's /payment/complete redirect lands on a different
-            # node than the one that ran select_plan. In that case the merchant
-            # was charged but the Grant is never created. Log loudly so this is
-            # observable instead of a silent dropped grant — a node-local cache on
-            # a multi-node deploy is the usual cause; switch to a persistent store
-            # (Shopifex.RedirectAfter.Ecto) via config :shopifex, :redirect_after_agent.
+        with {int_charge_id, ""} <- Integer.parse(to_string(raw_charge_id)) do
+          charge_id_str = to_string(int_charge_id)
+
+          case redirect_after_agent.get(int_charge_id) do
+            nil ->
+              Logger.error(
+                "[shopifex] complete_payment: no redirect-after entry for charge_id=" <>
+                  "#{inspect(raw_charge_id)} (shop=#{inspect(shop_url)}). Treating as forbidden. " <>
+                  "If the merchant was actually charged, the grant was just dropped: the default " <>
+                  "RedirectAfterAgent is in-memory and node-local, so the confirmation redirect " <>
+                  "missed on a multi-node deploy. Configure a persistent " <>
+                  "config :shopifex, :redirect_after_agent (e.g. Shopifex.RedirectAfter.Ecto)."
+              )
+
+              send_resp(conn, 403, "Could not verify this payment confirmation.")
+
+            binding_blob ->
+              case Shopifex.ChargeBinding.verify(binding_blob) do
+                {:ok,
+                 %{
+                   shop_url: bound_shop,
+                   plan_id: bound_plan_id,
+                   redirect_after: bound_redirect
+                 }} ->
+                  if bound_shop == shop_url and bound_plan_id == to_string(raw_plan_id) do
+                    case Shopifex.Shops.get_shop_by_url(shop_url) do
+                      nil ->
+                        send_resp(conn, 403, "Could not verify this payment confirmation.")
+
+                      shop ->
+                        payment_guard = Application.fetch_env!(:shopifex, :payment_guard)
+                        plan = payment_guard.get_plan(raw_plan_id)
+
+                        case verify_charge(shop, plan, charge_id_str) do
+                          :ok ->
+                            case payment_guard.create_grant(shop, plan, int_charge_id) do
+                              {:ok, grant} ->
+                                redirect_after = URI.decode_www_form(bound_redirect)
+                                after_payment(conn, shop, plan, grant, redirect_after)
+
+                              {:error, %Ecto.Changeset{} = changeset} ->
+                                redirect_after_agent.set(int_charge_id, binding_blob)
+
+                                Logger.error(
+                                  "[shopifex] complete_payment: grant changeset rejected attributes: #{inspect(changeset.errors)}"
+                                )
+
+                                raise "Grant changeset rejected attributes: #{inspect(changeset.errors)}"
+
+                              {:error, reason} ->
+                                redirect_after_agent.set(int_charge_id, binding_blob)
+
+                                Logger.error(
+                                  "[shopifex] complete_payment: create_grant failed: #{inspect(reason)}"
+                                )
+
+                                raise "create_grant failed: #{inspect(reason)}"
+                            end
+
+                          {:error, reason} ->
+                            redirect_after_agent.set(int_charge_id, binding_blob)
+
+                            Logger.info(
+                              "[shopifex] complete_payment: charge not active for charge_id=#{charge_id_str}: #{inspect(reason)}"
+                            )
+
+                            send_resp(conn, 403, "charge not active")
+                        end
+                    end
+                  else
+                    # Charge ids are sequential-looking integers, so a third party can
+                    # scan `charge_id` values with an arbitrary shop/plan_id and try to
+                    # consume other merchants' pending entries. Restore the entry (the
+                    # blob is signed, so it can't be forged) so the legitimate merchant's
+                    # confirmation still works.
+                    redirect_after_agent.set(int_charge_id, binding_blob)
+
+                    Logger.error(
+                      "[shopifex] complete_payment: charge binding mismatch: expected shop #{inspect(bound_shop)} and plan #{inspect(bound_plan_id)}, got shop #{inspect(shop_url)} and plan #{inspect(raw_plan_id)}"
+                    )
+
+                    send_resp(conn, 403, "Could not verify this payment confirmation.")
+                  end
+
+                {:error, reason} ->
+                  # Same restoration as the mismatch branch above: the blob we just
+                  # read back is exactly what was stored, so replacing it is safe even
+                  # when verification failed.
+                  redirect_after_agent.set(int_charge_id, binding_blob)
+
+                  Logger.error(
+                    "[shopifex] complete_payment: invalid charge binding (#{inspect(reason)}). If using a custom select_plan action, ensure it calls ShopifexWeb.PaymentController.bind_charge/4."
+                  )
+
+                  send_resp(conn, 403, "Could not verify this payment confirmation.")
+              end
+          end
+        else
+          _ ->
             Logger.error(
-              "[shopifex] complete_payment: no redirect-after entry for charge_id=" <>
-                "#{inspect(charge_id)} (shop=#{inspect(shop_url)}). Treating as forbidden. " <>
-                "If the merchant was actually charged, the grant was just dropped: the default " <>
-                "RedirectAfterAgent is in-memory and node-local, so the confirmation redirect " <>
-                "missed on a multi-node deploy. Configure a persistent " <>
-                "config :shopifex, :redirect_after_agent (e.g. Shopifex.RedirectAfter.Ecto)."
+              "[shopifex] complete_payment: invalid non-integer charge_id #{inspect(raw_charge_id)}"
             )
 
-            # Respond with a Plug.Conn directly. A controller action MUST return a
-            # conn; returning `{:error, :forbidden}` raised a 500 unless the app
-            # had wired an `action_fallback`, which this controller never required.
             send_resp(conn, 403, "Could not verify this payment confirmation.")
-
-          redirect_after ->
-            redirect_after = URI.decode_www_form(redirect_after)
-
-            case Shopifex.Shops.get_shop_by_url(shop_url) do
-              nil ->
-                send_resp(conn, 403, "Could not verify this payment confirmation.")
-
-              shop ->
-                payment_guard = Application.fetch_env!(:shopifex, :payment_guard)
-                plan = payment_guard.get_plan(plan_id)
-                {:ok, grant} = payment_guard.create_grant(shop, plan, charge_id)
-                after_payment(conn, shop, plan, grant, redirect_after)
-            end
         end
+      end
+
+      def complete_payment(conn, _params) do
+        send_resp(conn, 403, "Could not verify this payment confirmation.")
       end
 
       @impl ShopifexWeb.PaymentController
       def render_plans(conn, guard_identifier, redirect_after) do
         conn
         |> put_view(ShopifexWeb.PaymentHTML)
-        |> put_layout({ShopifexWeb.Layouts, :app})
+        |> put_root_layout(html: false)
+        |> put_layout(html: {ShopifexWeb.Layouts, :app})
         |> render("show_plans.html",
           guard: guard_identifier,
           redirect_after: redirect_after
@@ -317,7 +531,11 @@ defmodule ShopifexWeb.PaymentController do
         )
       end
 
-      defoverridable render_plans: 3, after_payment: 5, test_charge?: 2, create_charge: 2
+      defoverridable render_plans: 3,
+                     after_payment: 5,
+                     test_charge?: 2,
+                     create_charge: 2,
+                     verify_charge: 3
     end
   end
 end

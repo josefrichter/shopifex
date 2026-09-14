@@ -41,11 +41,9 @@ defmodule Shopifex.RedirectAfter.Ecto do
   Matches `Shopifex.RedirectAfterAgent` exactly:
 
     * `set/2` upserts `charge_id -> redirect_after`. A binary charge id is coerced
-      to an integer (the `bigint` key), matching the string id `PaymentController`
-      derives from the Shopify GID — same coercion as the B1 fix.
+      to an integer with `Integer.parse/1` (treating non-integers as a no-op `:ok`).
     * `get/1` is **one-shot**: it deletes the row and returns its `redirect_after`,
-      or `nil` if there is no entry. The delete-and-return is a single statement,
-      so two concurrent confirmations can't both consume the same charge.
+      or `nil` if there is no entry (treating non-integer binary ids as `nil`).
   """
   @behaviour Shopifex.RedirectAfterAgent
 
@@ -54,11 +52,15 @@ defmodule Shopifex.RedirectAfter.Ecto do
   @table "shopifex_charge_redirects"
 
   @impl Shopifex.RedirectAfterAgent
-  def set(charge_id, redirect_uri) when is_binary(charge_id),
-    do: set(String.to_integer(charge_id), redirect_uri)
+  def set(charge_id, redirect_uri) when is_binary(charge_id) do
+    case Integer.parse(charge_id) do
+      {int_id, ""} -> set(int_id, redirect_uri)
+      _ -> :ok
+    end
+  end
 
   @impl Shopifex.RedirectAfterAgent
-  def set(charge_id, redirect_uri) do
+  def set(charge_id, redirect_uri) when is_integer(charge_id) do
     repo = Shopifex.Shops.repo()
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -72,11 +74,18 @@ defmodule Shopifex.RedirectAfter.Ecto do
     :ok
   end
 
-  @impl Shopifex.RedirectAfterAgent
-  def get(charge_id) when is_binary(charge_id), do: get(String.to_integer(charge_id))
+  def set(_charge_id, _redirect_uri), do: :ok
 
   @impl Shopifex.RedirectAfterAgent
-  def get(charge_id) do
+  def get(charge_id) when is_binary(charge_id) do
+    case Integer.parse(charge_id) do
+      {int_id, ""} -> get(int_id)
+      _ -> nil
+    end
+  end
+
+  @impl Shopifex.RedirectAfterAgent
+  def get(charge_id) when is_integer(charge_id) do
     repo = Shopifex.Shops.repo()
 
     {_count, rows} =
@@ -88,4 +97,6 @@ defmodule Shopifex.RedirectAfter.Ecto do
       _ -> nil
     end
   end
+
+  def get(_), do: nil
 end

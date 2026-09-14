@@ -1,5 +1,7 @@
 defmodule Shopifex.ShopsTest do
-  use Shopifex.DataCase, async: true
+  # async: false — the empty-:webhook_topics test below mutates the global
+  # :webhook_topics app env.
+  use Shopifex.DataCase, async: false
   alias Shopifex.Shops
 
   @valid_shop_params %{
@@ -43,6 +45,21 @@ defmodule Shopifex.ShopsTest do
     test "subscribes to nothing when all topics already configured", %{shop: shop} do
       stub_webhooks(current: ["APP_UNINSTALLED", "ORDERS_CREATE", "CARTS_UPDATE"])
       assert [] = Shops.configure_webhooks(shop)
+    end
+
+    test "returns [] without any HTTP call when webhook_topics is empty", %{shop: shop} do
+      previous_topics = Application.fetch_env!(:shopifex, :webhook_topics)
+      Application.put_env(:shopifex, :webhook_topics, [])
+
+      on_exit(fn ->
+        Application.put_env(:shopifex, :webhook_topics, previous_topics)
+      end)
+
+      Req.Test.stub(Shopifex.ReqStub, fn _conn ->
+        flunk("configure_webhooks/1 made an HTTP call despite an empty :webhook_topics list")
+      end)
+
+      assert Shops.configure_webhooks(shop) == []
     end
   end
 

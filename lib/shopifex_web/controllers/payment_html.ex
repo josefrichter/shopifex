@@ -19,12 +19,34 @@ defmodule ShopifexWeb.PaymentHTML do
 
   @doc "True when `plan` grants exactly the shop's current grant set (the active plan)."
   def current_plan?(%Plug.Conn{} = conn, plan) do
-    Enum.sort(List.wrap(plan.grants)) == Enum.sort(current_grant_list(conn))
+    current_plan?(current_grant_list(conn), plan)
   end
 
-  @doc "Human price label, e.g. `$9.99/month` or `$390 one-time`."
-  def price_label(%{type: "recurring_application_charge"} = plan), do: "$#{plan.price}/month"
-  def price_label(plan), do: "$#{plan.price} one-time"
+  def current_plan?(current_grants, plan) when is_list(current_grants) do
+    Enum.sort(List.wrap(plan.grants)) == Enum.sort(current_grants)
+  end
+
+  @doc "Human price label, e.g. `$9.99/month`, `€100/year`, or `$390 one-time`."
+  def price_label(plan) do
+    currency = Map.get(plan, :currency_code, "USD") || "USD"
+
+    price_str =
+      case currency do
+        "USD" -> "$#{plan.price}"
+        "EUR" -> "€#{plan.price}"
+        "GBP" -> "£#{plan.price}"
+        code -> "#{code} #{plan.price}"
+      end
+
+    case plan.type do
+      "recurring_application_charge" ->
+        interval = if Map.get(plan, :annual, false), do: "/year", else: "/month"
+        "#{price_str}#{interval}"
+
+      _ ->
+        "#{price_str} one-time"
+    end
+  end
 
   @doc "The deduped list of grant identifiers the shop currently holds."
   def current_grant_list(%Plug.Conn{} = conn) do

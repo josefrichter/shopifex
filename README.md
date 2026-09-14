@@ -1,114 +1,58 @@
-<img width="350" src="https://github.com/ericdude4/shopifex/raw/master/guides/images/logo.png" alt="Shopifex">
+<img width="350" src="https://github.com/josefrichter/shopifex/raw/modern-shopifex/guides/images/logo.png" alt="Shopifex">
 
 ---
 
-A simple boilerplate package for creating Shopify embedded apps with the Elixir Phoenix framework.
+Shopifex is a Phoenix library for building Shopify **embedded apps**. Version
+3.0 targets Shopify's current (2026) embedded-app model: managed installation
+via token exchange, expiring offline access tokens with background refresh,
+the GraphQL Admin API for webhooks and billing, App Bridge session-token
+authentication, and a Phoenix 1.8 baseline.
 
-> **This is a fork** of [ericdude4/shopifex](https://github.com/ericdude4/shopifex) (v2.4.0). See [Why this fork exists](#why-this-fork-exists) below.
+## Status
 
-## Installation (fork)
+Shopifex 3.0 is developed on [`josefrichter/shopifex`](https://github.com/josefrichter/shopifex),
+branch `modern-shopifex`, pending an upstream release into
+[ericdude4/shopifex](https://github.com/ericdude4/shopifex). The fork's
+default branch (`master`) still tracks the pre-3.0 codebase, so pin the
+branch explicitly as shown below.
+
+## Installation
 
 ```elixir
 def deps do
   [
-    {:shopifex, github: "josefrichter/shopifex"}
+    {:shopifex, github: "josefrichter/shopifex", branch: "modern-shopifex"}
   ]
 end
 ```
 
-If you want the original upstream package from Hex instead, use `{:shopifex, "~> 2.4"}`.
-
-## Why this fork exists
-
-**Forked in March 2026** to add support for Shopify's modern embedded app architecture.
-
-### The problem
-
-Shopify has moved to **managed app installation** and **session tokens** as the default for all embedded apps. The key changes:
-
-- **Managed installation** — Shopify sends an `id_token` JWT on app load instead of the traditional OAuth authorization code redirect. The app must exchange this token for an offline access token via [RFC 8693 token exchange](https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/token-exchange).
-- **Session tokens** — Embedded apps run in an iframe where browsers block third-party cookies. Auth must work without cookies. Shopify's App Bridge provides session tokens via `shopify.idToken()`.
-- **No more OAuth redirects in iframes** — The old OAuth install flow (redirect to Shopify → approve scopes → redirect back) breaks inside iframes. Managed installation handles this transparently.
-
-Upstream Shopifex (v2.4.0) only supports the traditional OAuth code exchange flow and passes Guardian JWT tokens in URL parameters for session management. This doesn't work for new Shopify apps that use managed installation.
-
-### What this fork adds
-
-| Feature | Description |
-|---|---|
-| **`Shopifex.Plug.ManagedInstall`** | New plug that intercepts `id_token` from Shopify, exchanges it for an offline access token, and creates the shop record. Drop it into your pipeline before `ShopifySession`. |
-| **`:embedded` LiveView on_mount** | `ShopifexWeb.LiveSession` now has an `:embedded` hook that reads the shop from the Phoenix session without requiring tokens in URLs or LiveSocket connect params. |
-| **`:managed_install` pipeline** | Available via `ShopifexWeb.Routes.pipelines/0` for easy router setup. |
-| **HTTPoison → Req** | All HTTP calls replaced with [Req](https://hex.pm/packages/req) (modern Elixir HTTP client). |
-
-### Why not upstream?
-
-Upstream Shopifex is sparsely maintained — roughly one commit every few months since 2023, single maintainer. A [PR for Shopify CLI compatibility](https://github.com/ericdude4/shopifex/pull/81) has been open since March 2025. The changes needed here are fundamental (new auth flow, new plug, dependency swap), not small patches, and waiting for upstream review wasn't viable.
-
-### Why not other Elixir Shopify libraries?
-
-We evaluated every Shopify-related Elixir package on Hex and GitHub (as of March 2026):
-
-| Library | What it is | Why it didn't work |
-|---|---|---|
-| **[shopifex](https://github.com/ericdude4/shopifex)** (upstream) | Full framework — OAuth, webhooks, billing, session management | Only supports traditional OAuth, not managed installation. This fork fixes that. |
-| **[shopify_graphql](https://github.com/malomohq/shopify-graphql-elixir)** | GraphQL API client | API client only — no auth, no webhooks, no app framework. Complementary, not a replacement. |
-| **[shopify](https://github.com/nsweeting/shopify)** (nsweeting) | REST API client | Abandoned since 2019. Uses HTTPoison + Poison. No GraphQL. |
-| **[exshopify](https://github.com/sticksnleaves/exshopify)** | REST API client with OAuth | Inactive since 2021. |
-| **[ex_shopify_app](https://hex.pm/packages/ex_shopify_app)** | Framework attempt | 0 stars, 7 commits, GPL licensed, no documentation. |
-| **[ueberauth_shopify](https://hex.pm/packages/ueberauth_shopify)** | Ueberauth OAuth strategy | Traditional OAuth only — exactly what Shopify is moving away from. |
-| **[plug_shopify_jwt](https://hex.pm/packages/plug_shopify_jwt)** | JWT validation plug | Tiny, last updated 2021. |
-
-**Shopifex is the only viable full framework for Shopify apps in Elixir.** The ecosystem is thin compared to Node.js (official `@shopify/shopify-app-js`) or Ruby (official `shopify_api` gem). Forking was the only practical path.
-
-### Existing shopifex forks
-
-We also checked all active forks of upstream shopifex. None had implemented managed installation or replaced the Guardian JWT auth flow:
-
-- **briansage/shopifex** — Phoenix 1.7+ compat fixes, CSP improvements. Still uses Guardian JWT.
-- **NexPB/shopifex** — Shopify CLI webhook management (PR #81). Traditional OAuth, not token exchange.
-- **helording/shopifex**, **pepicrft/shopifex** — minor variations of NexPB's changes.
-
----
-
 ## Learning resources
 
 - **[Getting Started tutorial](https://josefrichter.github.io/shopifex/)** — a
-  beginner-friendly walkthrough (source: [`docs/index.html`](docs/index.html)) that
-  builds a live "Bestsellers" LiveView dashboard (auth, Admin GraphQL, webhooks +
+  beginner-friendly walkthrough (source:
+  [`docs/index.html`](https://github.com/josefrichter/shopifex/blob/modern-shopifex/docs/index.html))
+  that builds a live "Bestsellers" LiveView dashboard (auth, Admin GraphQL, webhooks +
   PubSub, billing, App Bridge/Polaris).
 - **[Parity matrix](docs/parity-matrix.md)** — how Shopifex compares to Shopify's
   official JS and Ruby libraries.
 
+## Upgrading from 2.x
+
+See [`docs/upgrading.md`](docs/upgrading.md) for the migration steps
+(dependency, database migrations, config keys, router, billing, LiveView) and
+a post-upgrade smoke-test checklist.
+
 ## Claude Code plugin
 
 This repo doubles as a [Claude Code](https://docs.claude.com/en/docs/claude-code)
-plugin marketplace. The bundled `shopifex` skill teaches Claude the library's
-conventions and gotchas so it scaffolds Shopifex features correctly (managed-install
-auth, `Shopifex.API.graphql/3`, webhooks, billing, testing, App Bridge/Polaris UI).
+plugin marketplace. The bundled `shopifex` skill (`skills/shopifex/`) teaches Claude
+the library's conventions so it scaffolds Shopifex features correctly.
 
 ```
 /plugin marketplace add josefrichter/shopifex
 /plugin install shopifex@shopifex
 ```
 
-The skill lives in `skills/shopifex/` (`SKILL.md` + `reference.md`) and auto-activates
-when you work in a Phoenix app that uses Shopifex.
-
----
-
-## Original Installation
-
-The package can be installed
-by adding `shopifex` to your list of dependencies in `mix.exs`: (note, OTP 22 or greater required)
-
-```elixir
-def deps do
-  [
-    {:shopifex, "~> 2.2"}
-  ]
-end
-```
 ## Quickstart
 #### Run the install script
 This will install all of the supported Shopifex features.
@@ -164,7 +108,8 @@ end
 The Shopify token request runs outside a database transaction; only a short
 compare-and-persist step locks the shop row after the response arrives.
 
-Add the `:shopifex` config settings to your `config.ex`. More config details [here](https://hexdocs.pm/shopifex)
+Add the `:shopifex` config settings to your `config.ex`. More config details in the
+[Getting Started tutorial](https://josefrichter.github.io/shopifex/).
 
 ```elixir
 config :shopifex,
@@ -218,9 +163,12 @@ Now the following pipelines are accessible:
 
 - `:managed_install` -> Runs `Shopifex.Plug.ManagedInstall`: verifies Shopify's `id_token`, exchanges it for an expiring offline access token, and builds the session. Already included in `auth_routes/1` before `:shopify_session`.
 - `:shopify_session` -> Verifies the App Bridge `id_token` (or the legacy HMAC), and makes session information available via `Shopifex.Plug` API. No-ops when `:managed_install` already loaded the shop. Also removes iFrame blocking headers so app can render in Shopify admin.
+- `:validate_install_hmac` -> Runs `Shopifex.Plug.ValidateHmac` only. Used by the legacy OAuth `/auth/install` and `/auth/update` routes, which verify the query HMAC without loading a shop into the session.
 - `:shopify_webhook` -> Validates Shopify webhook request HMAC (Base64, constant-time) and makes session information available via `Shopifex.Plug` API.
 - `:shopify_admin_link` -> Validates Shopify admin link & bulk action link requests and makes session information available via `Shopifex.Plug` API.
 - `:shopify_api` -> Ensures that a valid Shopify session token is present in the `Authorization` header. Useful for async requests between your SPA front end and Shopifex backend.
+- `:shopify_proxy` -> Validates [App proxy](https://shopify.dev/docs/apps/build/online-store/display-dynamic-data) requests (signed with `signature`, not `hmac`) via `Shopifex.Plug.ValidateHmac, require_timestamp: true`, then resolves the shop with `Shopifex.Plug.LoadProxyShop`.
+- `:shopify_embedded` -> Runs `Shopifex.Plug.SetCSPHeader`, restricting app loading to within the Shopify admin. Included by default in `payment_routes/2`'s plan-selection pages (pass `shopify_embedded: false` to opt out).
 - `:shopifex_browser` -> Same as your normal `:browser` pipeline, except it calls `Shopifex.Plug.LoadInIframe`.
 
 Now add this basic example of these plugs in action in `router.ex`. These endpoints need to be added to your Shopify app whitelist
@@ -333,9 +281,12 @@ database — see [App proxy](#app-proxy).) For LiveView, use the
 
 > **Legacy (v2) token-in-URL pattern.** Older apps threaded
 > `Shopifex.Plug.session_token(conn)` through a `token` query parameter on every
-> link/form. This still works (`session_token/1` reads `id_token`, `token`, and the
-> `Bearer` header), but it is no longer necessary for managed-install apps and is
-> kept only for backward compatibility.
+> link/form. `session_token/1` still reads `id_token`, `token`, and the `Bearer`
+> header, but the value it reads is now Shopify's short-lived (~60s) `id_token`,
+> not an app-issued token — carrying it in a link only survives the *immediate*
+> hop, not a full session. For managed-install apps the supported path is App
+> Bridge's full-page reload (a fresh `id_token` on every load) and
+> `authenticatedFetch`/`fetch` for XHR, not hand-carried query params.
 
 ## App proxy
 
@@ -378,25 +329,32 @@ There are two special considerations to using LiveView in your embedded app.
 
 First, you'll need to get the LiveView socket configured to work in the Shopify iframe. This [elixir](https://elixirforum.com/t/how-to-embed-a-liveview-via-iframe/65066) post gives some excellent tips.
 
-Second, you'll need to copy the `current_shop` and `session_token` from the Plug connection to the socket and make them available in your assigns on_mount. The `@current_shop` will be your authenticated Shop resource, and `@session_token` can be used when you navigate between live views similar to the template links above.  The `shopifex_live_session` macro is a drop-in replacement fom `live_session` to handle this.
+Second, use the `:embedded` on_mount hook so LiveView reads the shop from the
+Phoenix session set during the HTTP request, instead of requiring tokens in
+URLs or LiveSocket connect params. `@current_shop` is your authenticated Shop
+resource. **`@session_token` is not reusable for navigation** — the
+`:embedded` hook assigns `session_token: nil` (Shopify's `id_token` lives
+~60s and App Bridge doesn't reissue one on a client-side `navigate`); use a
+plain `<.link navigate={...}>` between LiveViews in the same `live_session`,
+the same as the template links above. Wire it up with a plain `live_session`:
 
-```
-scope "/", ShoplensWeb do
+```elixir
+scope "/", MyAppWeb do
   pipe_through [:shopifex_browser, :shopify_session]
 
-  ShopifexWeb.Routes.shopifex_live_session :embedded, layout: {MyApp.Layouts, :embedded} do
+  live_session :embedded,
+    session: {ShopifexWeb.LiveSession, :put_shop_in_session, []},
+    on_mount: [{ShopifexWeb.LiveSession, :embedded}],
+    layout: {MyAppWeb.Layouts, :embedded} do
     live "/", MyAppLive
     ...
   end
-
-  # If you need more control, you can still use `live_session` like this:
-  #  live_session :embedded, 
-  #    session: {ShopifexWeb.LiveSession, :put_shop_in_session, []}, 
-  #    on_mount: {ShopifexWeb.LiveSession, :assign_shop_to_socket} do
-  #       ...
-  #   end
 end
 ```
+
+`ShopifexWeb.Routes.shopifex_live_session/3` is the 2.x-compatible macro: it
+uses the default `:assign_shop_to_socket` hook, which assigns `@current_shop`
+and `@session_token` without redirecting when no shop is in the session.
 
 ## Update app permissions
 
@@ -420,13 +378,19 @@ This system allows you to use the `Shopifex.Plug.PaymentGuard` plug. If the merc
 
 Generate the schemas
 
-`mix phx.gen.schema Shops.Plan plans name:string price:string features:array:string grants:array:string test:boolean usages:integer type:string`
+`mix phx.gen.schema Shops.Plan plans name:string price:string features:array:string grants:array:string test:boolean trial_days:integer usages:integer type:string`
 
-`mix phx.gen.schema Shops.Grant grants shop_id:references:shops charge_id:integer grants:array:string remaining_usages:integer total_usages:integer`
+`mix phx.gen.schema Shops.Grant grants shop_id:references:shops charge_id:bigint grants:array:string remaining_usages:integer total_usages:integer`
+
+`usages` (Plan) and `remaining_usages`/`charge_id` (Grant) should be nullable —
+unlimited plans have no usage cap, and `create_shop_grant/2` never supplies a
+`charge_id`. Shopify charge ids exceed Postgres's `int4` range, hence
+`charge_id:bigint` rather than `:integer`. (`mix shopifex.install` generates
+both schemas with this nullability for you.)
 
 Add the config options:
 ```elixir
-config :my_app,
+config :shopifex,
   payment_guard: MyApp.Shops.PaymentGuard,
   grant_schema: MyApp.Shops.Grant,
   plan_schema: MyApp.Shops.Plan,
@@ -454,13 +418,23 @@ Add payment routes to `router.ex`:
 ShopifexWeb.Routes.payment_routes(MyAppWeb.PaymentController)
 ```
 
+> **Custom select-plan actions.** The standard `select_plan/2` action calls
+> `create_charge/2` and then cryptographically binds the pending charge with
+> `ShopifexWeb.PaymentController.bind_charge/4` before redirecting to Shopify's
+> confirmation URL. If your app defines its own action to initiate charges
+> instead of using `select_plan/2`, it **must** call `bind_charge/4` itself —
+> `complete_payment/2` rejects a charge with no signed binding. Override
+> `create_charge/2` / `verify_charge/3` (both public, overridable callbacks on
+> `ShopifexWeb.PaymentController`) to customise how a charge is created and how
+> its status is verified with Shopify.
+
 > ⚠️ **Multi-node deploys (Fly.io, etc.):** use `Shopifex.RedirectAfter.Ecto`, not
 > the in-memory default. The billing flow stores a `charge_id → redirect_after`
 > entry at `/payment/select-plan` and reads it back at `/payment/complete`. The
 > default `Shopifex.RedirectAfterAgent` keeps that in a **node-local** `Agent`, so
 > when Shopify's confirmation returns to a *different* node the lookup misses —
-> `complete_payment/2` returns `{:error, :forbidden}` **and the grant is never
-> created** (the merchant is still charged). The shipped, DB-backed
+> `complete_payment/2` responds `403` (a `Plug.Conn`, logged at `:error`) **and
+> the grant is never created** (the merchant is still charged). The shipped, DB-backed
 > `Shopifex.RedirectAfter.Ecto` is safe across nodes:
 >
 > ```elixir

@@ -9,6 +9,11 @@ defmodule Shopifex.Plug.ShopifySession do
   end
 
   def call(conn, _) do
+    # Idempotent: guards against a bare `Plug.Test.conn/2` (no router/Plug.Parsers
+    # in front) where `conn.query_params` is `%Plug.Conn.Unfetched{}` — reading it
+    # below (directly, or via `hmac_matches?/2`'s query-string HMAC) would raise.
+    conn = Plug.Conn.fetch_query_params(conn)
+
     # When `Shopifex.Plug.ManagedInstall` runs earlier in the pipeline it has
     # already verified the `id_token`, (re)exchanged the offline access token and
     # placed the shop in the session. Re-authenticating here would be redundant
@@ -40,27 +45,42 @@ defmodule Shopifex.Plug.ShopifySession do
   end
 
   defp initiate_new_session(conn) do
-    # Constant-time compare (and accept a rotated-out `:old_secret` if set);
-    # returns false when no HMAC is present, so a missing header just fails.
-    if Shopifex.Plug.hmac_matches?(conn, Shopifex.Plug.get_hmac(conn)) do
+    # Validate timestamp freshness if present, then constant-time compare
+    # HMAC (and accept a rotated-out `:old_secret` if set).
+    with :ok <- Shopifex.Plug.validate_timestamp(conn, require_timestamp: false),
+         true <- Shopifex.Plug.hmac_matches?(conn, Shopifex.Plug.get_hmac(conn)) do
       conn
       |> do_new_session()
     else
-      Logger.info("Rejecting session request with invalid HMAC")
-      respond_invalid(conn)
+      {:error, reason} ->
+        Logger.info("Rejecting session request with invalid timestamp (#{reason})")
+        respond_invalid(conn)
+
+      false ->
+        Logger.info("Rejecting session request with invalid HMAC")
+        respond_invalid(conn)
     end
   end
 
-  defp do_new_session(conn = %{params: %{"shop" => shop_url}}) do
-    case Shopifex.Shops.get_shop_by_url(shop_url) do
-      nil ->
-        redirect_to_install(conn, shop_url)
+  defp do_new_session(conn) do
+    conn = Plug.Conn.fetch_query_params(conn)
 
-      shop ->
-        locale = get_locale(conn)
-        host = get_host(conn)
+    case conn.query_params["shop"] do
+      shop_url when is_binary(shop_url) and shop_url != "" ->
+        case Shopifex.Shops.get_shop_by_url(shop_url) do
+          nil ->
+            redirect_to_install(conn, shop_url)
 
-        Shopifex.Plug.build_session(conn, shop, host, locale)
+          shop ->
+            locale = get_locale(conn)
+            host = get_host(conn)
+
+            Shopifex.Plug.build_session(conn, shop, host, locale)
+        end
+
+      _ ->
+        Logger.info("Rejecting session request without shop in query params")
+        respond_invalid(conn)
     end
   end
 
@@ -86,7 +106,8 @@ defmodule Shopifex.Plug.ShopifySession do
   defp respond_invalid(conn) do
     conn
     |> put_view(ShopifexWeb.AuthHTML)
-    |> put_layout({ShopifexWeb.Layouts, :app})
+    |> put_root_layout(html: false)
+    |> put_layout(html: {ShopifexWeb.Layouts, :app})
     |> render("select_store.html")
     |> halt()
   end

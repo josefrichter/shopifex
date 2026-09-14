@@ -30,8 +30,11 @@ defmodule Shopifex.ManagedInstall.Callbacks do
 
   All callbacks are optional — `use Shopifex.ManagedInstall.Callbacks` provides
   defaults (`insert_shop/1` delegates to `Shopifex.Shops.create_shop/1`,
-  `after_install/1` and `after_exchange/2` are no-ops). The plug always configures
-  webhooks itself (first install and on every re-exchange), regardless of the hooks.
+  `after_install/1` and `after_exchange/2` are no-ops). The plug always
+  configures webhooks itself on first install. On re-exchange it reconciles
+  webhooks too, but only when `config :shopifex, :configure_webhooks_on_exchange?`
+  is not set to `false` (default `true`); either way, `:webhook_topics` set to
+  `[]` disables registration entirely.
 
   ## When each hook runs
 

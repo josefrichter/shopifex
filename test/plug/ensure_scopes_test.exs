@@ -41,6 +41,34 @@ defmodule Shopifex.Plug.EnsureScopesTest do
              "https://shopifex.myshopify.com/admin/oauth/authorize?client_id=thisisafakeapikey"
   end
 
+  test "renders redirect page with exactly one doctype even when root layout is set", %{
+    conn: conn
+  } do
+    defmodule DummyRootLayout do
+      use Phoenix.Component
+
+      def root(assigns) do
+        ~H"""
+        <!DOCTYPE html>
+        <html>
+          <body>{@inner_content}</body>
+        </html>
+        """
+      end
+    end
+
+    conn =
+      conn
+      |> Phoenix.Controller.put_root_layout(html: {DummyRootLayout, :root})
+      |> Shopifex.Plug.EnsureScopes.call(
+        required_scopes: "read_orders",
+        on_missing_scopes: :redirect
+      )
+
+    body = html_response(conn, 200)
+    assert length(Regex.scan(~r/<!DOCTYPE html>/i, body)) == 1
+  end
+
   test "throws error when shop not in session", %{
     conn: conn
   } do

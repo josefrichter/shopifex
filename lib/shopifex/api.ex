@@ -5,8 +5,8 @@ defmodule Shopifex.API do
   This is the library's single chokepoint for Admin API calls. Every request
   goes through `graphql/3`, which keeps expiring offline access tokens fresh:
 
-  - **Proactive refresh** before the call (`Shopifex.Auth.ensure_fresh_token/1`):
-    if the token will expire within ~5 minutes, refresh now so the request
+  - **Proactive refresh** before the call (`Shopifex.Auth.fresh_token/1`): if
+    the token will expire within ~5 minutes, refresh now so the request
     doesn't race the expiry.
   - **Reactive refresh** after a 401 (`Shopifex.Auth.refresh!/1`): if Shopify
     rejects the token anyway (e.g. revoked early), refresh once and retry the
@@ -14,6 +14,27 @@ defmodule Shopifex.API do
 
   This is the strategy Shopify explicitly recommends:
   https://shopify.dev/changelog/offline-access-tokens-now-support-expiry-and-refresh
+
+  ## Error propagation
+
+  A refresh failure only short-circuits the request when it's *terminal*
+  (`Shopifex.Auth.terminal_refresh_error?/1`) — a refresh token that's
+  expired, missing, or rejected outright by Shopify. In that case `graphql/3`
+  returns `{:error, {:token_refresh_failed, reason}}` without sending the
+  GraphQL request at all:
+
+  - Proactive terminal failure: no request is sent.
+  - Reactive terminal failure (refresh after a 401): the same tuple is
+    returned instead of the raw `{:error, {401, body}}`.
+
+  A *transient* refresh failure (e.g. `:refresh_in_progress`, a 5xx from
+  Shopify's token endpoint, or a transport error) doesn't block the request:
+  it's sent with whatever token the shop currently has. The one exception is
+  `:refresh_in_progress`, which also keeps the reactive 401 retry armed,
+  since another process might finish the refresh before this request's
+  token is checked. Any other transient failure disarms the reactive retry
+  (it would just repeat the same failing attempt), so a 401 in that case
+  returns the plain `{:error, {401, body}}`.
 
   ## What lives here vs. in your app
 
@@ -40,13 +61,38 @@ defmodule Shopifex.API do
   Run a GraphQL query/mutation against the shop's Admin API.
 
   Returns `{:ok, data}` on success, or `{:error, reason}` where `reason` is
-  either the GraphQL `errors` list (HTTP 200 with partial failure), a
-  `{status, body}` tuple, or a transport error.
+  one of:
+
+  - the GraphQL `errors` list (HTTP 200 with partial failure)
+  - a `{status, body}` tuple for a non-200/401 response, or a 401 that
+    survived the reactive refresh retry
+  - a transport error (e.g. `%Req.TransportError{}`)
+  - `{:token_refresh_failed, reason}` when a *terminal* token refresh
+    failure stopped the request — see the moduledoc's "Error propagation"
+    section
   """
   @spec graphql(struct(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def graphql(shop, query, variables \\ %{}) do
-    shop = Auth.ensure_fresh_token(shop)
-    do_graphql(shop, query, variables, _allow_retry = true)
+    case Auth.fresh_token(shop) do
+      {:ok, fresh_shop} ->
+        do_graphql(fresh_shop, query, variables, _allow_retry = true)
+
+      # Someone else is refreshing; send with the current token and keep the
+      # reactive 401 retry armed in case the refresh hasn't landed yet.
+      {:error, :refresh_in_progress} ->
+        do_graphql(shop, query, variables, _allow_retry = true)
+
+      {:error, reason} ->
+        if Auth.terminal_refresh_error?(reason) do
+          {:error, {:token_refresh_failed, reason}}
+        else
+          # Transient failure other than refresh_in_progress (5xx from the
+          # token endpoint, transport error, …): send with the current
+          # token, but don't run the reactive 401 retry — it would just
+          # repeat the refresh attempt that already failed.
+          do_graphql(shop, query, variables, _allow_retry = false)
+        end
+    end
   end
 
   defp do_graphql(shop, query, variables, allow_retry?) do
@@ -80,8 +126,12 @@ defmodule Shopifex.API do
           {:ok, refreshed_shop} ->
             do_graphql(refreshed_shop, query, variables, _allow_retry = false)
 
-          {:error, _reason} ->
-            unwrap_error(response)
+          {:error, reason} ->
+            if Auth.terminal_refresh_error?(reason) do
+              {:error, {:token_refresh_failed, reason}}
+            else
+              unwrap_error(response)
+            end
         end
 
       {:ok, response} ->

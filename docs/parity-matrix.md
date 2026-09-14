@@ -7,10 +7,10 @@ capabilities an embedded Shopify app needs in the current (2026) embedded-app
 model: managed installation, token exchange, expiring offline access tokens,
 session-token verification, HMAC/webhook security, and billing.
 
-The **Shopifex** column is grounded in the actual code at the time of writing
-(branch `modern-shopifex`, target release `3.0.0`, Admin API `2026-07`), not in
-aspiration. Where Shopifex differs from the official libraries or only partially
-covers a capability, it is marked honestly. This is a reference, not marketing.
+The **Shopifex** column is grounded in the actual code (Shopifex 3.0, Admin API
+`2026-07`), not in aspiration. Where Shopifex differs from the official
+libraries or only partially covers a capability, it is marked honestly. This
+is a reference, not marketing.
 
 Legend: ✅ supported / on par · ⚠️ partial or deliberately different · ❌ not
 provided.

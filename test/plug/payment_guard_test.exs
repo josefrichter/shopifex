@@ -43,7 +43,7 @@ defmodule Shopifex.Plug.PaymentGuardTest do
     assert body =~ "\\u003Cscript"
   end
 
-  test "payment guard grants access pay-walled function and places guard payment in session", %{
+  test "payment guard grants access pay-walled function and places guard payment in private", %{
     conn: conn,
     shop: shop
   } do
@@ -52,5 +52,47 @@ defmodule Shopifex.Plug.PaymentGuardTest do
     conn = Shopifex.Plug.PaymentGuard.call(conn, "premium_access")
 
     assert %ShopifexDummy.Shops.Grant{grants: ["premium_access"]} = conn.private.grant_for_guard
+  end
+
+  test "redirects to show-plans when grant usages are exhausted (0 remaining)", %{
+    conn: conn,
+    shop: shop
+  } do
+    Shopifex.Shops.create_grant(%{
+      shop_id: shop.id,
+      grants: ["exhausted_access"],
+      remaining_usages: 0,
+      total_usages: 10
+    })
+
+    halted_conn = Shopifex.Plug.PaymentGuard.call(conn, "exhausted_access")
+
+    assert halted_conn.halted
+    assert html_response(halted_conn, 302) =~ "/payment/show-plans?"
+  end
+
+  test "renders show-plans with exactly one doctype even when root layout is configured", %{
+    conn: conn
+  } do
+    defmodule DummyRoot do
+      use Phoenix.Component
+
+      def root(assigns) do
+        ~H"""
+        <!DOCTYPE html>
+        <html>
+          <body>{@inner_content}</body>
+        </html>
+        """
+      end
+    end
+
+    conn =
+      conn
+      |> Phoenix.Controller.put_root_layout(html: {DummyRoot, :root})
+      |> get("/payment/show-plans?guard_identifier=block&redirect_after=/")
+
+    body = html_response(conn, 200)
+    assert length(Regex.scan(~r/<!DOCTYPE html>/i, body)) == 1
   end
 end

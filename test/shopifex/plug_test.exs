@@ -85,6 +85,14 @@ defmodule Shopifex.PlugTest do
     end
   end
 
+  describe "validate_timestamp/2" do
+    test "accepts a bare Plug.Test.conn whose query params were never fetched" do
+      conn = Plug.Test.conn(:get, "/?timestamp=#{System.system_time(:second)}")
+
+      assert Shopifex.Plug.validate_timestamp(conn) == :ok
+    end
+  end
+
   describe "get_hmac/1" do
     test "GET request gets hash from hmac param" do
       assert "foobar" =

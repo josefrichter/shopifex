@@ -11,6 +11,9 @@ defmodule Mix.Shopifex.Config do
     plan_schema: <%= inspect plan_schema %>,
     grant_schema: <%= inspect grant_schema %>,
     payment_guard: <%= inspect payment_guard %>,
+    # Optional, legacy-OAuth only: Shopify managed installation does not use
+    # these redirect URLs, so omit both unless your app still does its own
+    # OAuth handshake.
     redirect_uri: "<%= tunnel_url %>/auth/install",
     reinstall_uri: "<%= tunnel_url %>/auth/update",
     webhook_uri: "<%= tunnel_url %>/webhook",

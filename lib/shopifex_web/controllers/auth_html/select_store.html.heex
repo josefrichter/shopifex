@@ -2,13 +2,21 @@
   <s-section>
     <s-paragraph>Install {app_name()} on your Shopify store to continue.</s-paragraph>
 
-    <s-banner :if={ShopifexWeb.Flash.get(assigns, :error)} tone="critical" heading="Couldn't install">
+    <s-banner
+      :if={ShopifexWeb.Flash.get(assigns, :error)}
+      tone="critical"
+      heading="Couldn't install"
+    >
       {ShopifexWeb.Flash.get(assigns, :error)}
     </s-banner>
 
     <%!-- Plain input/button so the form submits reliably regardless of the
           web-component form-association support in the merchant's browser. --%>
-    <form method="get" action={path_prefix() <> "/initialize-installation"} style="margin-top: 1rem;">
+    <form
+      method="get"
+      action={path_prefix() <> "/initialize-installation"}
+      style="margin-top: 1rem;"
+    >
       <label for="shop" style="display:block; font-weight:600; margin-bottom:.5rem;">Store URL</label>
       <input
         id="shop"

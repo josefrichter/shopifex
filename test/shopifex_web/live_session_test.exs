@@ -32,12 +32,29 @@ defmodule ShopifexWeb.LiveSessionTest do
   end
 
   test "on_mount(:embedded) redirects to /auth when no shop is in the session" do
-    assert {:halt, _socket} =
+    assert {:halt, socket} =
              LiveSession.on_mount(
                :embedded,
                %{},
                %{"shop_url" => nil},
                %Phoenix.LiveView.Socket{}
              )
+
+    assert {:redirect, %{to: "/auth"}} = socket.redirected
+  end
+
+  test "on_mount(:embedded) redirects respecting path_prefix" do
+    Application.put_env(:shopifex, :path_prefix, "/my_prefix")
+    on_exit(fn -> Application.delete_env(:shopifex, :path_prefix) end)
+
+    assert {:halt, socket} =
+             LiveSession.on_mount(
+               :embedded,
+               %{},
+               %{"shop_url" => nil},
+               %Phoenix.LiveView.Socket{}
+             )
+
+    assert {:redirect, %{to: "/my_prefix/auth"}} = socket.redirected
   end
 end

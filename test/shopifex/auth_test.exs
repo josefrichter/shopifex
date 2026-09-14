@@ -1,6 +1,8 @@
 defmodule Shopifex.AuthTest do
   use Shopifex.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Shopifex.{Auth, Shops}
 
   setup do
@@ -61,6 +63,73 @@ defmodule Shopifex.AuthTest do
       assert refreshed.access_token == "new_access_token"
       assert refreshed.refresh_token == "new_refresh_token"
     end
+
+    test "returns the shop unchanged when token_expires_at is a NaiveDateTime far in the future" do
+      shop =
+        Shops.create_shop(%{
+          url: "naive-fresh.myshopify.com",
+          scope: "read_orders",
+          access_token: "tok",
+          token_expires_at: later(),
+          refresh_token: "rt"
+        })
+
+      naive_shop = %{
+        shop
+        | token_expires_at:
+            NaiveDateTime.utc_now()
+            |> NaiveDateTime.add(3600, :second)
+            |> NaiveDateTime.truncate(:second)
+      }
+
+      assert Auth.ensure_fresh_token(naive_shop) == naive_shop
+    end
+
+    test "proactively refreshes when token_expires_at is a NaiveDateTime inside the safety window" do
+      Req.Test.stub(Shopifex.ReqStub, fn conn -> Req.Test.json(conn, token_response()) end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "naive-soon.myshopify.com",
+          scope: "read_orders",
+          access_token: "old",
+          token_expires_at: soon(),
+          refresh_token: "rt"
+        })
+
+      naive_shop = %{
+        shop
+        | token_expires_at:
+            NaiveDateTime.utc_now()
+            |> NaiveDateTime.add(60, :second)
+            |> NaiveDateTime.truncate(:second)
+      }
+
+      refreshed = Auth.ensure_fresh_token(naive_shop)
+      assert refreshed.access_token == "new_access_token"
+    end
+
+    test "returns the stale shop when the refresh fails" do
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => "invalid_grant"})
+      end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "ensure-fails.myshopify.com",
+          scope: "read_orders",
+          access_token: "old",
+          token_expires_at: soon(),
+          refresh_token: "rt"
+        })
+
+      log =
+        capture_log(fn ->
+          assert Auth.ensure_fresh_token(shop).access_token == "old"
+        end)
+
+      assert log =~ "Refresh token grant failed"
+    end
   end
 
   describe "refresh!/1" do
@@ -115,6 +184,123 @@ defmodule Shopifex.AuthTest do
       assert {:error, :no_refresh_token} = Auth.refresh!(shop)
     end
 
+    test "retries a transient 5xx with the same refresh token and succeeds" do
+      attempts = :counters.new(1, [:atomics])
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        n = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if n == 0 do
+          conn |> Plug.Conn.put_status(503) |> Req.Test.json(%{"error" => "unavailable"})
+        else
+          Req.Test.json(conn, token_response())
+        end
+      end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "transient-5xx.myshopify.com",
+          scope: "read_orders",
+          access_token: "old",
+          token_expires_at: soon(),
+          refresh_token: "rt"
+        })
+
+      capture_log(fn ->
+        assert {:ok, refreshed} = Auth.refresh!(shop)
+        assert refreshed.access_token == "new_access_token"
+      end)
+
+      assert :counters.get(attempts, 1) == 2
+    end
+
+    test "retries a 429 with a float Retry-After header instead of crashing" do
+      attempts = :counters.new(1, [:atomics])
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        n = :counters.get(attempts, 1)
+        :counters.add(attempts, 1, 1)
+
+        if n == 0 do
+          conn
+          |> Plug.Conn.put_resp_header("retry-after", "0.0")
+          |> Plug.Conn.put_status(429)
+          |> Req.Test.json(%{"error" => "rate_limited"})
+        else
+          Req.Test.json(conn, token_response())
+        end
+      end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "retry-after-float.myshopify.com",
+          scope: "read_orders",
+          access_token: "old",
+          token_expires_at: soon(),
+          refresh_token: "rt"
+        })
+
+      capture_log(fn ->
+        assert {:ok, refreshed} = Auth.refresh!(shop)
+        assert refreshed.access_token == "new_access_token"
+      end)
+
+      assert :counters.get(attempts, 1) == 2
+    end
+
+    test "does not retry a terminal 400 — a spent refresh token fails fast" do
+      attempts = :counters.new(1, [:atomics])
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        :counters.add(attempts, 1, 1)
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => "invalid_grant"})
+      end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "terminal-400.myshopify.com",
+          scope: "read_orders",
+          access_token: "old",
+          token_expires_at: soon(),
+          refresh_token: "spent"
+        })
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:refresh_failed, 400}} = Auth.refresh!(shop)
+        end)
+
+      assert log =~ "Refresh token grant failed"
+      assert :counters.get(attempts, 1) == 1
+    end
+
+    test "gives up after the retry budget and releases the lease" do
+      attempts = :counters.new(1, [:atomics])
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        :counters.add(attempts, 1, 1)
+        conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"error" => "boom"})
+      end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "always-5xx.myshopify.com",
+          scope: "read_orders",
+          access_token: "old",
+          token_expires_at: soon(),
+          refresh_token: "rt"
+        })
+
+      capture_log(fn ->
+        assert {:error, {:refresh_failed, 500}} = Auth.refresh!(shop)
+      end)
+
+      # 1 initial attempt + max_retries: 2
+      assert :counters.get(attempts, 1) == 3
+      assert Repo.aggregate("shopifex_token_refresh_leases", :count) == 0
+    end
+
     test "returns {:error, {:refresh_failed, status}} when Shopify rejects the grant" do
       Req.Test.stub(Shopifex.ReqStub, fn conn ->
         conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => "invalid_grant"})
@@ -129,7 +315,30 @@ defmodule Shopifex.AuthTest do
           refresh_token: "expired_rt"
         })
 
-      assert {:error, {:refresh_failed, 400}} = Auth.refresh!(shop)
+      capture_log(fn ->
+        assert {:error, {:refresh_failed, 400}} = Auth.refresh!(shop)
+      end)
+    end
+
+    test "returns {:error, :shop_not_found} for a plain map without an :id" do
+      shop = %{url: "mapless.myshopify.com", refresh_token: "rt"}
+
+      assert {:error, :shop_not_found} = Auth.refresh!(shop)
+    end
+
+    test "returns {:error, :shop_not_found} when the shop is deleted mid-flight" do
+      shop =
+        Shops.create_shop(%{
+          url: "deleted-mid-flight.myshopify.com",
+          scope: "read_orders",
+          access_token: "old",
+          token_expires_at: soon(),
+          refresh_token: "rt"
+        })
+
+      Shops.delete_shop(shop)
+
+      assert {:error, :shop_not_found} = Auth.refresh!(shop)
     end
 
     test "second caller observes the first caller's fresh token without re-hitting Shopify" do
@@ -240,6 +449,9 @@ defmodule Shopifex.AuthTest do
     test "does not overwrite a newer managed-install token pair", %{
       task_supervisor: task_supervisor
     } do
+      prev_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: prev_level) end)
       test_pid = self()
 
       Req.Test.stub(Shopifex.ReqStub, fn conn ->
@@ -272,11 +484,19 @@ defmodule Shopifex.AuthTest do
           refresh_token_expires_at: DateTime.add(managed_expires_at, 86_400, :second)
         })
 
-      send(request_pid, :release_refresh)
+      prev_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: prev_level) end)
 
-      assert {:ok, observed} = task_result(refresh_task)
-      assert observed.access_token == "managed_access"
-      assert observed.refresh_token == "managed_refresh"
+      log =
+        capture_log(fn ->
+          send(request_pid, :release_refresh)
+          assert {:ok, observed} = task_result(refresh_task)
+          assert observed.access_token == "managed_access"
+          assert observed.refresh_token == "managed_refresh"
+        end)
+
+      assert log =~ "superseded by a concurrent token exchange"
 
       persisted = Repo.get!(ShopifexDummy.Shop, managed_shop.id)
       assert persisted.access_token == "managed_access"
@@ -297,7 +517,10 @@ defmodule Shopifex.AuthTest do
           refresh_token: "rt"
         })
 
-      assert {:error, {:refresh_failed, 400}} = Auth.refresh!(shop)
+      capture_log(fn ->
+        assert {:error, {:refresh_failed, 400}} = Auth.refresh!(shop)
+      end)
+
       assert Repo.aggregate("shopifex_token_refresh_leases", :count) == 0
 
       Req.Test.stub(Shopifex.ReqStub, fn conn -> Req.Test.json(conn, token_response()) end)

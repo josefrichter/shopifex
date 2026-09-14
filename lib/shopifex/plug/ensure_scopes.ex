@@ -114,7 +114,8 @@ defmodule Shopifex.Plug.EnsureScopes do
 
     conn
     |> put_view(ShopifexWeb.PageHTML)
-    |> put_layout({ShopifexWeb.Layouts, :app})
+    |> put_root_layout(html: false)
+    |> put_layout(html: {ShopifexWeb.Layouts, :app})
     |> render("redirect.html", redirect_location: reinstall_url, message: message)
     |> halt()
   end

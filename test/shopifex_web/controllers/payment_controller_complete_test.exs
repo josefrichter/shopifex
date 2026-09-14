@@ -1,7 +1,6 @@
 defmodule ShopifexWeb.PaymentControllerCompleteTest do
-  # Covers complete_payment/2: the loud-fail on a redirect-cache miss (B2), and
-  # the full select_plan -> complete_payment grant creation when a persistent
-  # Shopifex.RedirectAfter.Ecto store is configured.
+  # Covers complete_payment/2: charge binding verification, verify_charge/3,
+  # loud logs on cache miss/forgery, and grant creation.
   use ShopifexWeb.ConnCase, async: false
 
   import ExUnit.CaptureLog
@@ -26,14 +25,24 @@ defmodule ShopifexWeb.PaymentControllerCompleteTest do
     {:ok, conn: conn, shop: shop, plan: plan}
   end
 
+  defp stub_active_subscription(status) do
+    Req.Test.stub(Shopifex.ReqStub, fn conn ->
+      Req.Test.json(conn, %{
+        "data" => %{
+          "node" => %{
+            "status" => status
+          }
+        }
+      })
+    end)
+  end
+
   describe "redirect-cache miss" do
     test "logs an actionable error and responds with a 403 Conn (not the bare tuple)", %{
       conn: conn,
       shop: shop,
       plan: plan
     } do
-      # No redirect-after entry was ever stored for this charge (the multi-node
-      # symptom: the confirmation redirect hit a node that never ran select_plan).
       {result, log} =
         with_log(fn ->
           ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
@@ -43,8 +52,6 @@ defmodule ShopifexWeb.PaymentControllerCompleteTest do
           })
         end)
 
-      # A controller action MUST return a Plug.Conn — returning {:error, :forbidden}
-      # raised a 500. Assert the response shape, not the old tuple.
       assert %Plug.Conn{status: 403} = result
       assert log =~ "no redirect-after entry"
       assert log =~ "redirect_after_agent"
@@ -55,9 +62,6 @@ defmodule ShopifexWeb.PaymentControllerCompleteTest do
       shop: shop,
       plan: plan
     } do
-      # Drive it through the real router/action pipeline — the exact path the bug
-      # broke (a non-Conn return raised before any response). The earlier
-      # function-level test bypassed this and so never caught the 500.
       {conn, _log} =
         with_log(fn ->
           get(conn, "/payment/complete", %{
@@ -68,6 +72,229 @@ defmodule ShopifexWeb.PaymentControllerCompleteTest do
         end)
 
       assert conn.status == 403
+    end
+  end
+
+  describe "non-integer charge_id" do
+    test "returns 403 without crashing on non-integer charge_id", %{
+      conn: conn,
+      shop: shop,
+      plan: plan
+    } do
+      {conn, log} =
+        with_log(fn ->
+          ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+            "charge_id" => "invalid_charge_id",
+            "plan_id" => to_string(plan.id),
+            "shop" => shop.url
+          })
+        end)
+
+      assert conn.status == 403
+      assert log =~ "invalid non-integer charge_id"
+    end
+  end
+
+  describe "charge binding verification" do
+    test "plain redirect string in store (legacy) is rejected with 403 and actionable log", %{
+      conn: conn,
+      shop: shop,
+      plan: plan
+    } do
+      charge_id = 12345
+      Shopifex.RedirectAfterAgent.set(charge_id, "/legacy-redirect")
+
+      {result, log} =
+        with_log(fn ->
+          ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+            "charge_id" => to_string(charge_id),
+            "plan_id" => to_string(plan.id),
+            "shop" => shop.url
+          })
+        end)
+
+      assert result.status == 403
+      assert log =~ "invalid charge binding"
+      assert log =~ "bind_charge/4"
+
+      # Restoring an already-invalid blob is a no-op (it's exactly what was
+      # already stored), but complete_payment must not drop it either way.
+      assert Shopifex.RedirectAfterAgent.get(charge_id) == "/legacy-redirect"
+    end
+
+    test "mismatched shop in return-url returns 403, restores the entry, and the legitimate request still succeeds",
+         %{
+           conn: conn,
+           shop: shop,
+           plan: plan
+         } do
+      charge_id = 23456
+      ShopifexWeb.PaymentController.bind_charge(shop, plan, charge_id, "/dashboard")
+
+      {result, log} =
+        with_log(fn ->
+          ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+            "charge_id" => to_string(charge_id),
+            "plan_id" => to_string(plan.id),
+            "shop" => "other-attacker.myshopify.com"
+          })
+        end)
+
+      assert result.status == 403
+      assert log =~ "charge binding mismatch"
+
+      # Entry is restored: charge ids are sequential-looking, so a third party
+      # scanning them with an arbitrary shop/plan must not be able to make the
+      # legitimate merchant's own confirmation land on "no entry" (dropped grant).
+      # (Not read here via `get/1` first — that call is itself one-shot and would
+      # consume the very entry this test is proving survives.)
+      stub_active_subscription("ACTIVE")
+
+      legit_conn =
+        ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+          "charge_id" => to_string(charge_id),
+          "plan_id" => to_string(plan.id),
+          "shop" => shop.url
+        })
+
+      assert legit_conn.status in [301, 302]
+      assert Enum.find(Shops.list_grants(), &(&1.charge_id == charge_id))
+    end
+
+    test "mismatched plan in return-url returns 403, restores the entry, and the legitimate request still succeeds",
+         %{
+           conn: conn,
+           shop: shop,
+           plan: plan
+         } do
+      charge_id = 34567
+      ShopifexWeb.PaymentController.bind_charge(shop, plan, charge_id, "/dashboard")
+
+      {result, log} =
+        with_log(fn ->
+          ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+            "charge_id" => to_string(charge_id),
+            "plan_id" => "99999",
+            "shop" => shop.url
+          })
+        end)
+
+      assert result.status == 403
+      assert log =~ "charge binding mismatch"
+
+      stub_active_subscription("ACTIVE")
+
+      legit_conn =
+        ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+          "charge_id" => to_string(charge_id),
+          "plan_id" => to_string(plan.id),
+          "shop" => shop.url
+        })
+
+      assert legit_conn.status in [301, 302]
+      assert Enum.find(Shops.list_grants(), &(&1.charge_id == charge_id))
+    end
+  end
+
+  describe "charge verification and grant creation" do
+    test "happy path: active charge creates grant and redirects to Shopify admin", %{
+      conn: conn,
+      shop: shop,
+      plan: plan
+    } do
+      charge_id = 45678
+      stub_active_subscription("ACTIVE")
+      ShopifexWeb.PaymentController.bind_charge(shop, plan, charge_id, "/dashboard")
+
+      conn =
+        ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+          "charge_id" => to_string(charge_id),
+          "plan_id" => to_string(plan.id),
+          "shop" => shop.url
+        })
+
+      assert conn.status in [301, 302]
+      [location] = Plug.Conn.get_resp_header(conn, "location")
+      assert location =~ "/admin/apps/"
+      assert location =~ "/dashboard"
+
+      [grant] = Shops.list_grants()
+      assert grant.charge_id == charge_id
+      assert grant.grants == ["premium"]
+
+      # Entry was consumed
+      assert Shopifex.RedirectAfterAgent.get(charge_id) == nil
+    end
+
+    test "verify_charge returning error: returns 403, logs info, and restores store entry", %{
+      conn: conn,
+      shop: shop,
+      plan: plan
+    } do
+      charge_id = 56789
+      stub_active_subscription("PENDING")
+      ShopifexWeb.PaymentController.bind_charge(shop, plan, charge_id, "/dashboard")
+
+      conn =
+        ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+          "charge_id" => to_string(charge_id),
+          "plan_id" => to_string(plan.id),
+          "shop" => shop.url
+        })
+
+      assert conn.status == 403
+      assert conn.resp_body =~ "charge not active"
+
+      # Entry was restored so merchant can retry after approving
+      restored_blob = Shopifex.RedirectAfterAgent.get(charge_id)
+      assert is_binary(restored_blob)
+      assert {:ok, %{shop_url: url}} = Shopifex.ChargeBinding.verify(restored_blob)
+      assert url == shop.url
+    end
+
+    test "changeset error on create_grant restores store entry and raises", %{
+      conn: conn,
+      shop: shop,
+      plan: plan
+    } do
+      charge_id = 67890
+      stub_active_subscription("ACTIVE")
+      ShopifexWeb.PaymentController.bind_charge(shop, plan, charge_id, "/dashboard")
+
+      # First create grant with same charge_id if unique or simulate changeset error
+      # Dummy app grant schema doesn't have unique constraint on charge_id, so we can mock create_grant
+      # by defining a temporary test payment guard or stubbing
+      defmodule FailingPaymentGuard do
+        use Shopifex.PaymentGuard
+
+        @impl Shopifex.PaymentGuard
+        def create_grant(_shop, _plan, _charge_id) do
+          changeset =
+            ShopifexDummy.Shops.Grant.changeset(%ShopifexDummy.Shops.Grant{}, %{})
+            |> Ecto.Changeset.add_error(:charge_id, "is invalid")
+
+          {:error, changeset}
+        end
+      end
+
+      prev_guard = Application.get_env(:shopifex, :payment_guard)
+      Application.put_env(:shopifex, :payment_guard, FailingPaymentGuard)
+
+      on_exit(fn ->
+        Application.put_env(:shopifex, :payment_guard, prev_guard)
+      end)
+
+      assert_raise RuntimeError, ~r/Grant changeset rejected attributes/, fn ->
+        ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+          "charge_id" => to_string(charge_id),
+          "plan_id" => to_string(plan.id),
+          "shop" => shop.url
+        })
+      end
+
+      # Store entry must be restored
+      restored_blob = Shopifex.RedirectAfterAgent.get(charge_id)
+      assert is_binary(restored_blob)
     end
   end
 
@@ -93,10 +320,10 @@ defmodule ShopifexWeb.PaymentControllerCompleteTest do
       plan: plan
     } do
       charge_id = "4019552312"
+      stub_active_subscription("ACTIVE")
 
-      # select_plan stores this (here we store it directly, simulating that the
-      # write happened on a *different* node — the Ecto store is shared).
-      :ok = Shopifex.RedirectAfter.Ecto.set(charge_id, "/")
+      # select_plan calls bind_charge/4
+      :ok = ShopifexWeb.PaymentController.bind_charge(shop, plan, charge_id, "/")
 
       conn =
         ShopifexDummyWeb.PaymentController.complete_payment(conn, %{

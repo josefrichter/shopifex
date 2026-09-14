@@ -20,7 +20,7 @@ defmodule Shopifex.Plug.ShopifyWebhookTest do
       |> Plug.Conn.put_req_header("x-shopify-shop-domain", "noshop.myshopify.com")
       |> Plug.Conn.put_req_header("x-shopify-hmac-sha256", hmac)
       |> Plug.Conn.put_req_header("content-type", "application/json")
-      |> post(Routes.webhook_path(@endpoint, :action), "{\"foo\": \"bar\"}")
+      |> post("/webhook", "{\"foo\": \"bar\"}")
 
     assert conn.status == 200
   end
@@ -33,7 +33,7 @@ defmodule Shopifex.Plug.ShopifyWebhookTest do
       |> Plug.Conn.put_req_header("x-shopify-shop-domain", "noshop.myshopify.com")
       |> Plug.Conn.put_req_header("x-shopify-hmac-sha256", hmac)
       |> Plug.Conn.put_req_header("content-type", "application/json")
-      |> post(Routes.webhook_path(@endpoint, :action), "{\"foo\": \"bar\"}")
+      |> post("/webhook", "{\"foo\": \"bar\"}")
 
     assert conn.status == 401
   end
@@ -47,7 +47,7 @@ defmodule Shopifex.Plug.ShopifyWebhookTest do
       |> Plug.Conn.put_req_header("x-shopify-topic", "foo/bar")
       |> Plug.Conn.put_req_header("x-shopify-hmac-sha256", hmac)
       |> Plug.Conn.put_req_header("content-type", "application/json")
-      |> post(Routes.webhook_path(@endpoint, :action), "{\"foo\": \"bar\"}")
+      |> post("/webhook", "{\"foo\": \"bar\"}")
 
     assert conn.status == 200
   end

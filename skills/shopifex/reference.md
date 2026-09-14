@@ -17,8 +17,9 @@ Flow on `/auth` (pipeline `[:shopifex_browser, :managed_install, :shopify_sessio
    HS256, checks `aud`/`dest`/`iss`/`exp`/`nbf`).
 2. New shop → token exchange (`expiring=1`), persists `access_token`, `token_expires_at`,
    `refresh_token`, `refresh_token_expires_at`, `scope`; configures webhooks; runs the
-   managed-install callback. Existing stale shop (>50 min) → re-exchange + webhook reconcile.
-   Fresh shop → builds session directly.
+   managed-install callbacks. Existing shop whose `token_expires_at` is within ~10 minutes
+   of expiry (or already expired) → re-exchange + webhook reconcile. Fresh shop → builds
+   session directly.
 3. `Shopifex.Plug.ShopifySession` no-ops when a shop is already loaded; otherwise verifies
    the session token / legacy HMAC, then runs `EnsureScopes`.
 
@@ -41,19 +42,29 @@ defmodule MyApp.ManagedInstallCallbacks do
   @impl true
   def insert_shop(attrs), do: Shopifex.Shops.create_shop(attrs)   # customise persistence
   @impl true
-  def after_install(shop), do: :ok                                # side effects on first install
+  def after_install(shop), do: :ok                                # first install only
+  @impl true
+  def after_exchange(shop, _new? = new_install?), do: :ok         # every exchange: install AND refresh
 end
 ```
-Token refreshes of an existing shop do NOT run these. The legacy
-`ShopifexWeb.AuthController` callbacks (`after_install/3`, `after_update/3`, `insert_shop/1`)
-apply only to the **OAuth** controller flow, not managed install.
+`insert_shop/1` and `after_install/1` run on first install only —  token refreshes of an
+existing shop use `update_shop/2` instead and do NOT run them. `after_exchange/2` is the one
+hook that DOES run on every successful exchange, both first install (`new?` is `true`) and
+every refresh re-exchange (`new?` is `false`); use it for side effects that must also happen
+on refreshes. All three run synchronously in the request — spawn a `Task` for slow work. The
+legacy `ShopifexWeb.AuthController` callbacks (`after_install/3`, `after_update/3`,
+`insert_shop/1`) apply only to the **OAuth** controller flow, not managed install.
 
 ## Admin API
 `Shopifex.API.graphql(shop, query, variables \\ %{}) :: {:ok, map} | {:error, term}`.
 Returns the unwrapped `data` map on success. On HTTP 200 **with** a GraphQL `errors` array
 it returns `{:error, errors}` (errors take precedence — a partial `data` is dropped). On a
-401 it refreshes once and retries. API version: `config :shopifex, :api_version` (default
-`"2026-07"`), single source of truth.
+401 it refreshes once and retries — `{:error, {401, body}}` if that retry also fails or was
+disarmed. A *terminal* token-refresh failure (expired/missing refresh token, a 400/401 from
+Shopify's token endpoint, or shop not found) short-circuits the request entirely and returns
+`{:error, {:token_refresh_failed, reason}}` instead — handle this case explicitly if you
+pattern-match on `graphql/3`'s error shape. API version: `config :shopifex, :api_version`
+(default `"2026-07"`), single source of truth.
 
 Example context function:
 ```elixir
@@ -76,11 +87,22 @@ Defining your own `handle_topic/3` is `defoverridable` and **replaces all** clau
 `def handle_topic(conn, shop, topic), do: super(conn, shop, topic)` catch-all.
 
 Subscription management (GraphQL): `Shopifex.Shops.configure_webhooks/1` (idempotent — only
-creates missing), `get_current_webhooks/1`, `delete_webhook/2`. Topics come from
-`config :shopifex, :webhook_topics` (REST-style strings, e.g. `"orders/create"`). Configured
-on first install and reconciled on every re-exchange (self-healing). Webhook HMAC: Base64,
-constant-time, case-sensitive (`Shopifex.Plug.ShopifyWebhook`). Unknown shop → 200 (stops
-retries); bad HMAC → 401; missing/duplicate `x-shopify-topic` header → 400 (fails closed).
+creates missing), `get_current_webhooks/1` (returns `%{id, topic}` with GraphQL enum topics,
+e.g. `"ORDERS_CREATE"`), `delete_webhook/2` (takes a GraphQL GID, returns
+`{:ok, id} | {:error, errors}`). Topics come from `config :shopifex, :webhook_topics`
+(REST-style strings, e.g. `"orders/create"`). Configured on first install and reconciled on
+every managed-install token re-exchange (self-healing; gate with
+`config :shopifex, :configure_webhooks_on_exchange?`, default `true`) — never on the hot
+per-load path. Webhook HMAC: Base64, constant-time, case-sensitive
+(`Shopifex.Plug.ShopifyWebhook`). Unknown shop → 200 (stops retries); bad HMAC → 401;
+missing/duplicate `x-shopify-topic` header → 400 (fails closed).
+
+**TOML or GraphQL, not both.** If webhooks are declared declaratively in
+`shopify.app.toml` (`[webhooks]`), set `:webhook_topics` to `[]` — `configure_webhooks/1`
+then makes no GraphQL call at all. The `webhookSubscriptions` query Shopifex reconciles
+against only returns shop-scoped (API-created) subscriptions, not TOML/app-config ones, so
+leaving `:webhook_topics` populated alongside TOML topics registers a duplicate API
+subscription for each TOML topic (risking double delivery).
 
 For slow handlers, enqueue Oban and return 200 immediately (avoid Shopify's webhook timeout).
 
@@ -88,12 +110,28 @@ For slow handlers, enqueue Oban and return 200 immediately (avoid Shopify's webh
 - `payment_routes/2` adds `/payment/show-plans`, `/payment/select-plan`, `/payment/complete`,
   and API variants. Pass `shopify_embedded: false` to opt out of the CSP-embedded pipeline.
 - `MyApp.Shops.PaymentGuard` `use Shopifex.PaymentGuard` — overridable callbacks:
-  `grant_for_guard/2`, `grants_for_shop/1`, `use_grant/2`, `create_grant/3`, `get_plan/1`,
-  `list_available_plans_for_guard/2`. Defaults query the Grant schema.
+  `grant_for_guard/2`, `grants_for_shop/1`, `use_grant/2` (may return `nil` when the grant's
+  usages are already exhausted — the plug treats that as blocked), `create_grant/3`,
+  `get_plan/1`, `list_available_plans_for_guard/2`. Defaults query the Grant schema;
+  `grant_for_guard/2` prefers an unlimited grant over a metered one.
 - `plug Shopifex.Plug.PaymentGuard, "guard_name"` — redirects to the plan picker when the
   shop has no grant unlocking `"guard_name"`; on payment a Grant is created.
+- **Charge binding and verification.** `select_plan/2` calls `create_charge/2` then
+  `ShopifexWeb.PaymentController.bind_charge/4` to cryptographically bind
+  `{shop, plan, redirect_after}` to the charge id (signed, 48h max age, accepts
+  `:old_secret`) before redirecting to Shopify's confirmation URL. **Any custom select-plan
+  action must call `bind_charge/4` itself** — `complete_payment/2` rejects a charge with no
+  signed binding (a raw string in a custom `:redirect_after_agent` is not a valid binding).
+  On return, `complete_payment/2` checks the binding *and* calls the overridable
+  `verify_charge/3` callback to confirm the charge is actually active in Shopify
+  (`AppSubscription` status `ACTIVE`/`ACCEPTED`, `AppPurchaseOneTime` status `ACTIVE`) before
+  creating the `Grant`; a mismatch, inactive charge, or non-integer `charge_id` responds
+  `403` and restores the binding so the merchant can retry. Charge ids are strings (the
+  trailing numeric segment of a GraphQL GID) throughout this path.
 - **Multi-node billing:** the billing flow stores `charge_id → redirect_after` at
-  `/payment/select-plan` and reads it at `/payment/complete`. The default
+  `/payment/select-plan` and reads it at `/payment/complete`. The stored value is the
+  opaque signed charge-binding string `bind_charge/4` produces, not a raw redirect URL — a
+  custom `:redirect_after_agent` implementation must round-trip it unmodified. The default
   `Shopifex.RedirectAfterAgent` keeps that in a node-local `Agent`, so on multi-node
   deploys (Fly.io, …) the confirmation can land on a different node → cache miss →
   `complete_payment/2` responds **403** (a `Plug.Conn`, logged at `:error`) and **no
@@ -131,9 +169,11 @@ A nil/empty stored scope is treated as no scopes (raises, doesn't crash).
 | `old_secret` | accepted during a secret rotation (HMAC + token verify) |
 | `scopes` | EnsureScopes check (mirror the TOML) |
 | `api_version` | Admin API version (default `2026-07`) |
-| `webhook_topics`, `webhook_uri` | webhook subscription |
-| `managed_install_callbacks` | `insert_shop/1` + `after_install/1` hooks |
+| `webhook_topics`, `webhook_uri` | webhook subscription (`[]` disables Shopifex webhook registration — use for TOML-managed webhooks) |
+| `configure_webhooks_on_exchange?` | `true` (default) reconciles webhooks on every managed-install re-exchange, not just first install |
+| `managed_install_callbacks` | `insert_shop/1`, `after_install/1` (first install only), `after_exchange/2` (every exchange) hooks |
 | `payment_guard`, `plan_schema`, `grant_schema`, `payment_redirect_uri` | billing |
+| `redirect_after_agent` | billing charge→redirect store; default is node-local `Shopifex.RedirectAfterAgent` — use `Shopifex.RedirectAfter.Ecto` on multi-node deploys |
 | `path_prefix` | mount under a sub-path |
 | `hmac_timestamp_tolerance_seconds` | query-HMAC freshness window (default 90) |
 | `ensure_scopes_on_missing` | `:raise` (default) or `:redirect` |
@@ -151,7 +191,15 @@ A nil/empty stored scope is treated as no scopes (raises, doesn't crash).
   `timestamp` are rejected (no indefinitely-replayable signed URLs); admin-load / bulk-action
   links still allow a missing timestamp.
 - **Secret rotation:** set `config :shopifex, :old_secret` so both the current and previous
-  secret are accepted while you roll the credential.
+  secret are accepted while you roll the credential (also covers the billing charge-binding
+  signature).
+- `Shopifex.Plug.ShopifySession` resolves `shop` from the HMAC-signed query params, not the
+  raw request params — a POST body `shop` can't override the signed value. The shared
+  `Shopifex.Plug.validate_timestamp/2` helper rejects a stale `timestamp` on the initial
+  `/auth` session request too, when one is present.
+- `initialize_installation` validates the shop domain with the anchored
+  `Shopifex.ShopDomain.valid?/1` before building an external OAuth redirect (open-redirect
+  hardening).
 - `ShopifexWeb.CacheBodyReader` must be the `Plug.Parsers` `body_reader` (raw body for HMAC).
 
 ## Testing (`Shopifex.Test`)

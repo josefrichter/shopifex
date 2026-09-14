@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Shopifex.Install do
   @shortdoc "Installs Shopifex"
 
   @moduledoc """
-  Generates migrations, schema module files, and updates config.
+  Generates migrations, schema module files, and prints the config to add.
         mix shopifex.install
   ## Arguments
     * `--context-app` - context app to use for path and module names
@@ -90,22 +90,6 @@ defmodule Mix.Tasks.Shopifex.Install do
 
     Mix.shell().info("#{content}")
 
-    print_white(
-      "Add a migration for the billing redirect store " <>
-        "(`mix ecto.gen.migration create_shopifex_charge_redirects`) with this change/0:"
-    )
-
-    Mix.shell().info("""
-
-      def change do
-        create table(:shopifex_charge_redirects, primary_key: false) do
-          add :charge_id, :bigint, primary_key: true
-          add :redirect_after, :text, null: false
-          add :inserted_at, :utc_datetime, null: false
-        end
-      end
-    """)
-
     print_white("Add the following routes to `lib/#{context_app}_web/router.ex`:")
 
     """
@@ -125,7 +109,8 @@ defmodule Mix.Tasks.Shopifex.Install do
       scope "/", <%= inspect app_base %>Web do
         pipe_through [:shopifex_browser, :shopify_session]
 
-        get "/", PageController, :index
+        # your landing action
+        get "/", PageController, :home
       end
 
       # Make your webhook endpoint look like this

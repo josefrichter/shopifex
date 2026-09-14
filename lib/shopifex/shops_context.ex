@@ -97,31 +97,38 @@ defmodule Shopifex.ShopsContext do
       REST-style topic strings, e.g. `"orders/create"`).
       """
       def configure_webhooks(shop) do
-        with {:ok, current_webhooks} <- get_current_webhooks(shop) do
-          current_topics = current_webhooks |> Enum.map(& &1.topic) |> MapSet.new()
+        case Application.fetch_env!(:shopifex, :webhook_topics) do
+          [] ->
+            # Nothing desired: skip the GraphQL round-trip entirely rather
+            # than fetching current subscriptions just to reconcile against
+            # an empty set.
+            []
 
-          Logger.info(
-            "All current webhook topics for #{get_url(shop)}: #{Enum.join(MapSet.to_list(current_topics), ", ")}"
-          )
+          desired_topics ->
+            with {:ok, current_webhooks} <- get_current_webhooks(shop) do
+              current_topics = current_webhooks |> Enum.map(& &1.topic) |> MapSet.new()
 
-          desired_topics = Application.fetch_env!(:shopifex, :webhook_topics)
+              Logger.info(
+                "All current webhook topics for #{get_url(shop)}: #{Enum.join(MapSet.to_list(current_topics), ", ")}"
+              )
 
-          Enum.reduce(desired_topics, [], fn topic, acc ->
-            if MapSet.member?(current_topics, webhook_topic_to_graphql(topic)) do
-              acc
-            else
-              Logger.info("Subscribing to topic #{topic}")
-
-              case create_webhook(shop, topic) do
-                {:ok, webhook} ->
-                  [webhook | acc]
-
-                error ->
-                  Logger.info("Error subscribing to topic #{topic}: \n#{inspect(error)}")
+              Enum.reduce(desired_topics, [], fn topic, acc ->
+                if MapSet.member?(current_topics, webhook_topic_to_graphql(topic)) do
                   acc
-              end
+                else
+                  Logger.info("Subscribing to topic #{topic}")
+
+                  case create_webhook(shop, topic) do
+                    {:ok, webhook} ->
+                      [webhook | acc]
+
+                    error ->
+                      Logger.info("Error subscribing to topic #{topic}: \n#{inspect(error)}")
+                      acc
+                  end
+                end
+              end)
             end
-          end)
         end
       end
 

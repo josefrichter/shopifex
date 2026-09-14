@@ -1,7 +1,10 @@
 defmodule Shopifex.RedirectAfterAgent do
   @moduledoc """
-  Caches the post-payment "redirect after" URL keyed by Shopify charge id, so
-  `complete_payment/2` can recover it when Shopify redirects the merchant back.
+  Caches the post-payment charge binding keyed by Shopify charge id, so
+  `complete_payment/2` can recover and verify it when Shopify redirects the merchant back.
+
+  Values stored here are opaque signed charge-binding strings produced by
+  `ShopifexWeb.PaymentController.bind_charge/4`.
 
   ## Multi-node deploys: use `Shopifex.RedirectAfter.Ecto`
 
@@ -20,13 +23,12 @@ defmodule Shopifex.RedirectAfterAgent do
   apps. Any module implementing this behaviour works — the config seam is just
   `Application.get_env(:shopifex, :redirect_after_agent, __MODULE__)`.
 
-  When a lookup misses, `complete_payment/2` no longer fails silently: it logs an
-  actionable `Logger.error` (the usual cause is this node-local cache on a
-  multi-node deploy), so dropped grants are observable rather than invisible.
+  When a lookup misses, `complete_payment/2` logs an actionable `Logger.error`
+  (the usual cause is this node-local cache on a multi-node deploy), so dropped
+  grants are observable rather than invisible.
 
-  `set/2` and `get/1` agree on key type: both coerce a binary charge id to an
-  integer (matching the integer `grants.charge_id` column), so the string id that
-  `PaymentController` produces from a Shopify GID round-trips correctly.
+  `set/2` and `get/1` agree on key type: both coerce binary ids with `Integer.parse/1`
+  and treat non-integers as a miss (`nil` / no-op `:ok`) without raising.
   """
   use Agent
   require Logger
@@ -47,9 +49,14 @@ defmodule Shopifex.RedirectAfterAgent do
     Agent.start_link(fn -> %{} end, name: __MODULE__)
   end
 
-  def get(charge_id) when is_binary(charge_id), do: get(String.to_integer(charge_id))
+  def get(charge_id) when is_binary(charge_id) do
+    case Integer.parse(charge_id) do
+      {int_id, ""} -> get(int_id)
+      _ -> nil
+    end
+  end
 
-  def get(charge_id) do
+  def get(charge_id) when is_integer(charge_id) do
     Logger.info("Getting redirect_uri for charge #{charge_id}")
     redirect_uri = Agent.get(__MODULE__, &Map.get(&1, charge_id))
     Logger.info("Clearing redirect_uri for charge #{charge_id}")
@@ -57,15 +64,19 @@ defmodule Shopifex.RedirectAfterAgent do
     redirect_uri
   end
 
-  # Coerce to the same key type as `get/1` — `PaymentController` passes the charge
-  # id as a string (the trailing segment of the Shopify GID), but the return-url
-  # `charge_id` is looked up as an integer. Without this they never match and the
-  # grant is silently never created.
-  def set(charge_id, redirect_uri) when is_binary(charge_id),
-    do: set(String.to_integer(charge_id), redirect_uri)
+  def get(_), do: nil
 
-  def set(charge_id, redirect_uri) do
+  def set(charge_id, redirect_uri) when is_binary(charge_id) do
+    case Integer.parse(charge_id) do
+      {int_id, ""} -> set(int_id, redirect_uri)
+      _ -> :ok
+    end
+  end
+
+  def set(charge_id, redirect_uri) when is_integer(charge_id) do
     Logger.info("Storing redirect_uri for charge #{charge_id}")
     Agent.update(__MODULE__, &Map.put(&1, charge_id, redirect_uri))
   end
+
+  def set(_charge_id, _redirect_uri), do: :ok
 end
