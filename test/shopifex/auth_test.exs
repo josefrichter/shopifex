@@ -132,7 +132,7 @@ defmodule Shopifex.AuthTest do
     end
   end
 
-  describe "refresh!/1" do
+  describe "refresh/1" do
     test "persists all four token fields from the grant response" do
       Req.Test.stub(Shopifex.ReqStub, fn conn -> Req.Test.json(conn, token_response()) end)
 
@@ -145,7 +145,7 @@ defmodule Shopifex.AuthTest do
           refresh_token: "rt"
         })
 
-      assert {:ok, refreshed} = Auth.refresh!(shop)
+      assert {:ok, refreshed} = Auth.refresh(shop)
       assert refreshed.access_token == "new_access_token"
       assert refreshed.refresh_token == "new_refresh_token"
       assert %DateTime{} = refreshed.token_expires_at
@@ -166,7 +166,7 @@ defmodule Shopifex.AuthTest do
           refresh_token: "rt"
         })
 
-      assert {:ok, refreshed} = Auth.refresh!(shop)
+      assert {:ok, refreshed} = Auth.refresh(shop)
       assert refreshed.access_token == "plain_token"
       assert is_nil(refreshed.token_expires_at)
       assert is_nil(refreshed.refresh_token)
@@ -181,7 +181,7 @@ defmodule Shopifex.AuthTest do
           token_expires_at: soon()
         })
 
-      assert {:error, :no_refresh_token} = Auth.refresh!(shop)
+      assert {:error, :no_refresh_token} = Auth.refresh(shop)
     end
 
     test "retries a transient 5xx with the same refresh token and succeeds" do
@@ -208,7 +208,7 @@ defmodule Shopifex.AuthTest do
         })
 
       capture_log(fn ->
-        assert {:ok, refreshed} = Auth.refresh!(shop)
+        assert {:ok, refreshed} = Auth.refresh(shop)
         assert refreshed.access_token == "new_access_token"
       end)
 
@@ -242,7 +242,7 @@ defmodule Shopifex.AuthTest do
         })
 
       capture_log(fn ->
-        assert {:ok, refreshed} = Auth.refresh!(shop)
+        assert {:ok, refreshed} = Auth.refresh(shop)
         assert refreshed.access_token == "new_access_token"
       end)
 
@@ -268,7 +268,7 @@ defmodule Shopifex.AuthTest do
 
       log =
         capture_log(fn ->
-          assert {:error, {:refresh_failed, 400}} = Auth.refresh!(shop)
+          assert {:error, {:refresh_failed, 400}} = Auth.refresh(shop)
         end)
 
       assert log =~ "Refresh token grant failed"
@@ -293,7 +293,7 @@ defmodule Shopifex.AuthTest do
         })
 
       capture_log(fn ->
-        assert {:error, {:refresh_failed, 500}} = Auth.refresh!(shop)
+        assert {:error, {:refresh_failed, 500}} = Auth.refresh(shop)
       end)
 
       # 1 initial attempt + max_retries: 2
@@ -316,14 +316,14 @@ defmodule Shopifex.AuthTest do
         })
 
       capture_log(fn ->
-        assert {:error, {:refresh_failed, 400}} = Auth.refresh!(shop)
+        assert {:error, {:refresh_failed, 400}} = Auth.refresh(shop)
       end)
     end
 
     test "returns {:error, :shop_not_found} for a plain map without an :id" do
       shop = %{url: "mapless.myshopify.com", refresh_token: "rt"}
 
-      assert {:error, :shop_not_found} = Auth.refresh!(shop)
+      assert {:error, :shop_not_found} = Auth.refresh(shop)
     end
 
     test "returns {:error, :shop_not_found} when the shop is deleted mid-flight" do
@@ -338,12 +338,12 @@ defmodule Shopifex.AuthTest do
 
       Shops.delete_shop(shop)
 
-      assert {:error, :shop_not_found} = Auth.refresh!(shop)
+      assert {:error, :shop_not_found} = Auth.refresh(shop)
     end
 
     test "second caller observes the first caller's fresh token without re-hitting Shopify" do
       # Pre-write a fresh token as if a concurrent caller already refreshed,
-      # then call refresh!/1 with a stale in-memory copy. The initial reload
+      # then call refresh/1 with a stale in-memory copy. The initial reload
       # should short-circuit and return the fresh row.
       shop =
         Shops.create_shop(%{
@@ -362,7 +362,7 @@ defmodule Shopifex.AuthTest do
         })
 
       # No Req.Test stub registered → if this tried to hit Shopify it would raise.
-      assert {:ok, observed} = Auth.refresh!(shop)
+      assert {:ok, observed} = Auth.refresh(shop)
       assert observed.access_token == "stale"
       assert observed.refresh_token == "already_rotated"
     end
@@ -406,9 +406,12 @@ defmodule Shopifex.AuthTest do
       refute_receive {:refresh_request, _pid}, 100
     end
 
-    test "does not hold a shop-row lock while waiting for Shopify", %{
+    test "preserves a concurrent unrelated shop update made while the refresh awaits Shopify", %{
       task_supervisor: task_supervisor
     } do
+      # Under the sandbox every process shares one connection, so this cannot
+      # observe row locks; it proves the persist step merges a concurrent
+      # write instead of clobbering it. The lock itself is tested below.
       test_pid = self()
 
       Req.Test.stub(Shopifex.ReqStub, fn conn ->
@@ -443,6 +446,75 @@ defmodule Shopifex.AuthTest do
 
       assert {:ok, refreshed} = task_result(refresh_task)
       assert refreshed.scope == "write_orders"
+      assert refreshed.access_token == "new_access_token"
+    end
+
+    test "holds no shop-row lock while waiting for Shopify (independent DB connections)", %{
+      task_supervisor: task_supervisor
+    } do
+      # The sandbox shares one connection across processes, where a row lock
+      # can never block, so this test steps outside it: each participant checks
+      # out its own pooled connection, rows are committed for real, and on_exit
+      # deletes them.
+      alias Ecto.Adapters.SQL.Sandbox
+      url = "unboxed-lock.myshopify.com"
+      test_pid = self()
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        send(test_pid, {:refresh_request, self()})
+
+        receive do
+          :release_refresh -> Req.Test.json(conn, token_response())
+        end
+      end)
+
+      shop =
+        Sandbox.unboxed_run(Repo, fn ->
+          Shops.create_shop(%{
+            url: url,
+            scope: "read_orders",
+            access_token: "old",
+            token_expires_at: soon(),
+            refresh_token: "rt"
+          })
+        end)
+
+      on_exit(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.delete_all(from(s in ShopifexDummy.Shop, where: s.url == ^url))
+          Repo.delete_all(from(l in "shopifex_token_refresh_leases", where: l.shop_url == ^url))
+        end)
+      end)
+
+      refresh_task =
+        start_task(
+          task_supervisor,
+          fn -> Sandbox.unboxed_run(Repo, fn -> Auth.refresh(shop) end) end,
+          start?: false
+        )
+
+      :ok = Req.Test.allow(Shopifex.ReqStub, self(), refresh_task.pid)
+      send(refresh_task.pid, :run)
+
+      assert_receive {:refresh_request, request_pid}, 1_000
+
+      # While the refresh is parked inside the HTTP call, a second, independent
+      # connection must be able to lock the row at once. NOWAIT turns a held
+      # lock into an immediate error instead of a hang.
+      lock_result =
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            Repo.one(
+              from(s in ShopifexDummy.Shop, where: s.id == ^shop.id, lock: "FOR UPDATE NOWAIT")
+            )
+          end)
+        end)
+
+      assert {:ok, %ShopifexDummy.Shop{}} = lock_result
+
+      send(request_pid, :release_refresh)
+
+      assert {:ok, refreshed} = task_result(refresh_task)
       assert refreshed.access_token == "new_access_token"
     end
 
@@ -518,14 +590,14 @@ defmodule Shopifex.AuthTest do
         })
 
       capture_log(fn ->
-        assert {:error, {:refresh_failed, 400}} = Auth.refresh!(shop)
+        assert {:error, {:refresh_failed, 400}} = Auth.refresh(shop)
       end)
 
       assert Repo.aggregate("shopifex_token_refresh_leases", :count) == 0
 
       Req.Test.stub(Shopifex.ReqStub, fn conn -> Req.Test.json(conn, token_response()) end)
 
-      assert {:ok, refreshed} = Auth.refresh!(shop)
+      assert {:ok, refreshed} = Auth.refresh(shop)
       assert refreshed.access_token == "new_access_token"
     end
 
@@ -557,12 +629,12 @@ defmodule Shopifex.AuthTest do
         }
       ])
 
-      assert {:error, :refresh_in_progress} = Auth.refresh!(shop)
+      assert {:error, :refresh_in_progress} = Auth.refresh(shop)
     end
   end
 
   defp start_refresh_task(task_supervisor, shop) do
-    task = start_task(task_supervisor, fn -> Auth.refresh!(shop) end, start?: false)
+    task = start_task(task_supervisor, fn -> Auth.refresh(shop) end, start?: false)
     :ok = Req.Test.allow(Shopifex.ReqStub, self(), task.pid)
     send(task.pid, :run)
     task

@@ -40,11 +40,18 @@ defmodule Shopifex.ShopsTest do
         |> Enum.sort()
 
       assert created_topics == ["carts/update", "orders/create"]
+
+      # The mutations Shopify received carried the GraphQL enum form of exactly
+      # the two missing topics — not the already-subscribed one.
+      assert_received {:webhook_created, "CARTS_UPDATE"}
+      assert_received {:webhook_created, "ORDERS_CREATE"}
+      refute_received {:webhook_created, _}
     end
 
     test "subscribes to nothing when all topics already configured", %{shop: shop} do
       stub_webhooks(current: ["APP_UNINSTALLED", "ORDERS_CREATE", "CARTS_UPDATE"])
       assert [] = Shops.configure_webhooks(shop)
+      refute_received {:webhook_created, _}
     end
 
     test "returns [] without any HTTP call when webhook_topics is empty", %{shop: shop} do
@@ -64,8 +71,13 @@ defmodule Shopifex.ShopsTest do
   end
 
   # Stub the GraphQL endpoint: the `webhookSubscriptions` query returns the
-  # given current enum topics; `webhookSubscriptionCreate` mutations succeed.
+  # given current enum topics; `webhookSubscriptionCreate` mutations succeed
+  # only when the outgoing variables are what Shopify expects (enum topic, our
+  # configured callback URL, JSON format), and report the created enum topic
+  # to the test so it can assert the exact requested set.
   defp stub_webhooks(current: current_topics) do
+    parent = self()
+
     edges =
       Enum.with_index(current_topics, fn topic, i ->
         %{"node" => %{"id" => "gid://shopify/WebhookSubscription/#{i}", "topic" => topic}}
@@ -73,13 +85,23 @@ defmodule Shopifex.ShopsTest do
 
     Req.Test.stub(Shopifex.ReqStub, fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
-      query = Jason.decode!(body)["query"]
+      decoded = Jason.decode!(body)
+      query = decoded["query"]
 
       cond do
         String.contains?(query, "webhookSubscriptions(first") ->
           Req.Test.json(conn, %{"data" => %{"webhookSubscriptions" => %{"edges" => edges}}})
 
         String.contains?(query, "webhookSubscriptionCreate") ->
+          vars = decoded["variables"]
+          assert vars["topic"] =~ ~r/\A[A-Z][A-Z_]*\z/
+
+          assert vars["webhookSubscription"]["callbackUrl"] ==
+                   "https://shopifex-dummy.com/webhook"
+
+          assert vars["webhookSubscription"]["format"] == "JSON"
+          send(parent, {:webhook_created, vars["topic"]})
+
           Req.Test.json(conn, %{
             "data" => %{
               "webhookSubscriptionCreate" => %{

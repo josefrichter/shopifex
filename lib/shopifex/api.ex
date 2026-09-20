@@ -8,7 +8,7 @@ defmodule Shopifex.API do
   - **Proactive refresh** before the call (`Shopifex.Auth.fresh_token/1`): if
     the token will expire within ~5 minutes, refresh now so the request
     doesn't race the expiry.
-  - **Reactive refresh** after a 401 (`Shopifex.Auth.refresh!/1`): if Shopify
+  - **Reactive refresh** after a 401 (`Shopifex.Auth.refresh/1`): if Shopify
     rejects the token anyway (e.g. revoked early), refresh once and retry the
     request once.
 
@@ -122,7 +122,7 @@ defmodule Shopifex.API do
       # and retry the request. Only refresh-retry once to avoid an infinite
       # loop if the refresh succeeds but the new token is still rejected.
       {:ok, %{status: 401}} = response when allow_retry? ->
-        case Auth.refresh!(shop) do
+        case Auth.refresh(shop) do
           {:ok, refreshed_shop} ->
             do_graphql(refreshed_shop, query, variables, _allow_retry = false)
 

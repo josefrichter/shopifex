@@ -166,7 +166,7 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   refresh failure as terminal (`:refresh_token_expired`, `:no_refresh_token`,
   `:shop_not_found`, `{:refresh_failed, 400 | 401}`) or transient (worth
   retrying with the shop's current token).
-- **`{:error, :refresh_token_expired}`** — `Shopifex.Auth.refresh!/1` now checks
+- **`{:error, :refresh_token_expired}`** — `Shopifex.Auth.refresh/1` now checks
   the stored `refresh_token_expires_at` (with a 60s skew) before contacting
   Shopify, turning a doomed round-trip into an immediate, specific failure. A
   `nil` expiry is never treated as expired, so legacy installs are unaffected.

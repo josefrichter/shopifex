@@ -150,8 +150,8 @@ defmodule Shopifex.Plug.ManagedInstall do
   # — NOT the row's `updated_at`, which any unrelated shop update would reset (an
   # expired token would then look fresh and skip re-exchange). A nil
   # `token_expires_at` is a non-expiring token (legacy / custom app); like
-  # `Shopifex.Auth.ensure_fresh_token/1` it is treated as fresh — background
-  # refresh isn't possible, and a reactive 401 still refreshes on API calls.
+  # `Shopifex.Auth.ensure_fresh_token/1` it is treated as fresh — there is no
+  # refresh_token to spend, so a 401 on it is terminal (`:no_refresh_token`).
   defp token_stale?(shop) do
     case Map.get(shop, :token_expires_at) do
       %DateTime{} = expires_at ->

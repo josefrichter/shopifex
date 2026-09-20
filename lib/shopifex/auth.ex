@@ -24,7 +24,7 @@ defmodule Shopifex.Auth do
   - **Proactive:** `ensure_fresh_token/1` checks `token_expires_at` and
     refreshes if it's within the safety window (5 minutes).
   - **Reactive:** `Shopifex.API.graphql/3` catches 401 responses and calls
-    `refresh!/1` once before retrying.
+    `refresh/1` once before retrying.
 
   ## Concurrency
 
@@ -33,7 +33,7 @@ defmodule Shopifex.Auth do
   time. If two callers refresh in parallel, the second one will get
   `invalid_grant` from Shopify and clobber the new refresh_token.
 
-  To prevent that, `refresh!/1` acquires a cross-node lease in the dedicated
+  To prevent that, `refresh/1` acquires a cross-node lease in the dedicated
   `shopifex_token_refresh_leases` table. The Shopify request runs without a
   transaction or lock on the consumer's shop row. After Shopify responds, a
   short transaction locks and re-checks the shop before persisting, so a
@@ -43,9 +43,12 @@ defmodule Shopifex.Auth do
 
   - **Legacy installs have `refresh_token = nil`** — they were installed
     with the non-expiring offline token flow. For these shops,
-    `ensure_fresh_token/1` and `refresh!/1` are no-ops (there is no
-    refresh_token to spend), and the non-expiring access token keeps working
-    for API calls. Such a shop is **not** upgraded automatically: opening the
+    `ensure_fresh_token/1` returns the shop unchanged, `refresh/1` returns
+    `{:error, :no_refresh_token}`, and the non-expiring access token keeps
+    working for API calls. A 401 on such a token is terminal:
+    `Shopifex.API.graphql/3` returns
+    `{:error, {:token_refresh_failed, :no_refresh_token}}`, and the shop needs
+    a new token exchange or a reinstall. Such a shop is **not** upgraded automatically: opening the
     embedded app does not re-exchange it, because `Shopifex.Plug.ManagedInstall`
     treats a `nil` `token_expires_at` as fresh (its `token_stale?` guard returns
     false for a nil expiry). The exception is a stored `scope` that lacks a
@@ -54,7 +57,7 @@ defmodule Shopifex.Auth do
     that function's docs) or have the merchant reinstall the app.
 
   - **If the refresh_token itself expires** (after 90 days of no refresh),
-    Shopify returns 400 with `invalid_grant`. `refresh!/1` returns
+    Shopify returns 400 with `invalid_grant`. `refresh/1` returns
     `{:error, ...}`. The next embedded page load fixes it via fresh token
     exchange.
 
@@ -119,13 +122,13 @@ defmodule Shopifex.Auth do
 
   Strategy:
   - Token expiry is unknown (`nil`) → `{:ok, shop}` as-is. The caller is
-    responsible for invoking `refresh!/1` reactively on 401. This covers
+    responsible for invoking `refresh/1` reactively on 401. This covers
     legacy shops that pre-date the expiry columns.
   - Token expires within the safety window → refresh and return
-    `refresh!/1`'s result.
+    `refresh/1`'s result.
   - Otherwise → `{:ok, shop}` as-is.
 
-  `reason` is whatever `refresh!/1` returns; see its docs for the terminal
+  `reason` is whatever `refresh/1` returns; see its docs for the terminal
   vs. transient distinction (`terminal_refresh_error?/1`).
   """
   @spec fresh_token(struct()) :: {:ok, struct()} | {:error, term()}
@@ -135,7 +138,7 @@ defmodule Shopifex.Auth do
         {:ok, shop}
 
       expires_within_safety_window?(shop) ->
-        refresh!(shop)
+        refresh(shop)
 
       true ->
         {:ok, shop}
@@ -185,8 +188,8 @@ defmodule Shopifex.Auth do
   See `terminal_refresh_error?/1` for which `reason` values are worth
   giving up on vs. worth retrying later.
   """
-  @spec refresh!(struct()) :: {:ok, struct()} | {:error, term()}
-  def refresh!(shop) do
+  @spec refresh(struct()) :: {:ok, struct()} | {:error, term()}
+  def refresh(shop) do
     deadline = System.monotonic_time(:millisecond) + TokenRefreshLease.wait_timeout_ms()
     refresh_with_lease(shop, deadline)
   end
@@ -197,7 +200,7 @@ defmodule Shopifex.Auth do
 
   This is the in-place way for a shop installed before expiring offline tokens
   existed to acquire a `refresh_token`. Until it runs (or the merchant
-  reinstalls the app), `refresh!/1` returns `{:error, :no_refresh_token}` for
+  reinstalls the app), `refresh/1` returns `{:error, :no_refresh_token}` for
   that shop. Re-opening the embedded app does **not** upgrade it:
   `Shopifex.Plug.ManagedInstall` treats a `nil` `token_expires_at` as fresh (its
   `token_stale?` guard returns false for a nil expiry) and re-exchanges only
@@ -258,7 +261,7 @@ defmodule Shopifex.Auth do
   end
 
   @doc """
-  Classifies a `refresh!/1` / `fresh_token/1` error reason as terminal
+  Classifies a `refresh/1` / `fresh_token/1` error reason as terminal
   (retrying won't help without merchant action) or transient (worth retrying,
   e.g. with the shop's current token).
 
@@ -400,7 +403,7 @@ defmodule Shopifex.Auth do
         # parses the `Retry-After` header before consulting `:retry_delay`,
         # and `Req.Response.retry_delay_in_ms/1` only handles integer-second
         # values. Shopify documents a float (`Retry-After: 2.0`), which
-        # raises `CaseClauseError` and would escape `refresh!/1` into the
+        # raises `CaseClauseError` and would escape `refresh/1` into the
         # caller. `refresh_retry/2` below replaces it: same transient set
         # (408, 429, 500, 502, 503, 504, plus transport `:timeout` /
         # `:econnrefused` / `:closed`), but it parses `Retry-After` itself
