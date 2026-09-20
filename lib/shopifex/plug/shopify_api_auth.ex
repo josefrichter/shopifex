@@ -21,7 +21,6 @@ defmodule Shopifex.Plug.ShopifyApiAuth do
   """
 
   import Plug.Conn
-  require Logger
 
   def init(opts), do: opts
 

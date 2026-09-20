@@ -8,8 +8,9 @@ defmodule Shopifex.Plug.LoadProxyShop do
   `ValidateHmac` (the default `:shopify_proxy` pipeline does) so proxy controllers
   can use `Shopifex.Plug.current_shop(conn)`.
 
-  The `shop` param is part of the signed payload, so by the time this plug runs
-  `ValidateHmac` has already authenticated it.
+  Shopify signs the app-proxy **query** params only, so this plug reads `shop`
+  from `conn.query_params` — the bytes `ValidateHmac` authenticated — not from
+  `conn.params`, whose value a `POST` body can shadow.
 
   ## Options
 
@@ -34,12 +35,14 @@ defmodule Shopifex.Plug.LoadProxyShop do
   def init(options), do: Keyword.put_new(options, :on_missing, :pass)
 
   def call(conn, options) do
-    case conn.params do
+    conn = Plug.Conn.fetch_query_params(conn)
+
+    case conn.query_params do
       %{"shop" => shop_url} when is_binary(shop_url) ->
         load_shop(conn, shop_url, options)
 
       _ ->
-        on_missing(conn, options, "request has no shop param")
+        on_missing(conn, options, "request has no signed shop param")
     end
   end
 

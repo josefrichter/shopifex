@@ -80,12 +80,13 @@ defmodule Shopifex.Plug.ShopifySessionTest do
           "redirect_after" => "/after"
         })
 
+      # The signed query names shop_a; the POST body names shop_b. The session
+      # must bind to the signed query shop, never the body. Assert
+      # unconditionally — a nil shop would be a regression, not a pass.
       loaded_shop = Shopifex.Plug.current_shop(conn)
 
-      if loaded_shop do
-        assert loaded_shop.url == shop_a.url
-        refute loaded_shop.url == shop_b.url
-      end
+      assert loaded_shop
+      assert loaded_shop.url == shop_a.url
     end
 
     test "signed GET with timestamp 30 days old is rejected", %{conn: conn} do

@@ -43,9 +43,14 @@ defmodule Shopifex.Auth do
 
   - **Legacy installs have `refresh_token = nil`** — they were installed
     with the non-expiring offline token flow. For these shops,
-    `ensure_fresh_token/1` is a no-op; the only way to populate the new
-    fields is for a merchant to open the embedded app (which hits
-    `Shopifex.Plug.ManagedInstall` and re-exchanges via id_token).
+    `ensure_fresh_token/1` and `refresh!/1` are no-ops (there is no
+    refresh_token to spend), and the non-expiring access token keeps working
+    for API calls. Such a shop is **not** upgraded automatically: opening the
+    embedded app does not re-exchange it, because `Shopifex.Plug.ManagedInstall`
+    treats a `nil` `token_expires_at` as fresh (its `token_stale?` guard returns
+    false for a nil expiry). To move a legacy shop onto expiring tokens,
+    back-fill it with `migrate_to_expiring_token/1` (see that function's docs)
+    or have the merchant reinstall the app.
 
   - **If the refresh_token itself expires** (after 90 days of no refresh),
     Shopify returns 400 with `invalid_grant`. `refresh!/1` returns
@@ -77,7 +82,7 @@ defmodule Shopifex.Auth do
     https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/offline-access-tokens
   - Expiry & refresh changelog:
     https://shopify.dev/changelog/offline-access-tokens-now-support-expiry-and-refresh
-  - April 2026 requirement:
+  - Expiring offline access tokens required for public apps (Shopify changelog):
     https://shopify.dev/changelog/expiring-offline-access-tokens-required-for-public-apps-april-1-2026
   """
 
@@ -183,6 +188,71 @@ defmodule Shopifex.Auth do
   def refresh!(shop) do
     deadline = System.monotonic_time(:millisecond) + TokenRefreshLease.wait_timeout_ms()
     refresh_with_lease(shop, deadline)
+  end
+
+  @doc """
+  Exchange a legacy **non-expiring** offline access token for an expiring one
+  plus a refresh token.
+
+  This is the in-place way for a shop installed before expiring offline tokens
+  existed to acquire a `refresh_token`. Until it runs (or the merchant
+  reinstalls the app), `refresh!/1` returns `{:error, :no_refresh_token}` for
+  that shop. Re-opening the embedded app does **not** upgrade it:
+  `Shopifex.Plug.ManagedInstall` treats a `nil` `token_expires_at` as fresh (its
+  `token_stale?` guard returns false for a nil expiry) and never re-exchanges.
+
+  > #### Irreversible {: .warning}
+  >
+  > Shopify destroys the non-expiring token in the same transaction that issues
+  > the expiring pair. The call must never be retried — if the response is lost,
+  > that shop has no usable token until a merchant reinstalls. The request pins
+  > `retry: false` even when the host app configured retries globally.
+
+  Expiring offline access tokens are required for public apps' GraphQL Admin API
+  requests as of 2027-01-01.
+
+  ## Back-filling an install base
+
+  Idempotence lives in the *selection*, not the call — a shop that already has a
+  `token_expires_at` has been migrated:
+
+      import Ecto.Query
+
+      MyApp.Repo.all(from s in MyApp.Shop, where: is_nil(s.token_expires_at))
+      |> Enum.each(fn shop ->
+        case Shopifex.Auth.migrate_to_expiring_token(shop) do
+          {:ok, _migrated} -> :ok
+          {:error, reason} -> MyApp.report_migration_failure(shop, reason)
+        end
+      end)
+
+  Returns `{:ok, shop}`, or:
+
+    * `{:error, :already_expiring}` — the shop already has a `token_expires_at`
+    * `{:error, :no_access_token}` — nothing to exchange
+    * `{:error, :shop_not_found}` — the row vanished between call and persist
+    * `{:error, {:migrate_failed, status, body}}` — Shopify rejected the exchange
+    * `{:error, {:migrate_request_failed, exception}}` — transport failure; the
+      token may or may not have been cycled, so treat the shop as needing manual
+      inspection rather than re-running this function
+    * `{:error, {:persist_failed, changeset, attrs}}` — Shopify cycled the token
+      but the database write failed. `attrs` carries the new token material so
+      the caller can recover the shop; it is deliberately **not** logged.
+  """
+  @spec migrate_to_expiring_token(struct()) :: {:ok, struct()} | {:error, term()}
+  def migrate_to_expiring_token(shop) do
+    cond do
+      not is_nil(Map.get(shop, :token_expires_at)) ->
+        {:error, :already_expiring}
+
+      is_nil(Map.get(shop, :access_token)) ->
+        {:error, :no_access_token}
+
+      true ->
+        with {:ok, body} <- request_migration(shop) do
+          persist_migrated_shop(shop, body)
+        end
+    end
   end
 
   @doc """
@@ -523,6 +593,99 @@ defmodule Shopifex.Auth do
       %NaiveDateTime{} = expires_at ->
         NaiveDateTime.diff(expires_at, NaiveDateTime.utc_now(), :second) <=
           @refresh_token_skew_seconds
+    end
+  end
+
+  @offline_token_type "urn:shopify:params:oauth:token-type:offline-access-token"
+  @token_exchange_grant "urn:ietf:params:oauth:grant-type:token-exchange"
+
+  # Option order is the reverse of every other call site: config is appended
+  # *before* `retry: false`, so a host app's global `retry:` cannot re-enable
+  # retries on this unsafe, non-replayable exchange (later keys win).
+  defp request_migration(shop) do
+    url = Shopifex.Shops.get_url(shop)
+
+    body =
+      URI.encode_query(%{
+        "client_id" => Application.fetch_env!(:shopifex, :api_key),
+        "client_secret" => Application.fetch_env!(:shopifex, :secret),
+        "grant_type" => @token_exchange_grant,
+        "subject_token" => Map.get(shop, :access_token),
+        "subject_token_type" => @offline_token_type,
+        "requested_token_type" => @offline_token_type,
+        "expiring" => "1"
+      })
+
+    req_opts =
+      [
+        body: body,
+        headers: [{"content-type", "application/x-www-form-urlencoded"}]
+      ] ++
+        Application.get_env(:shopifex, :req_options, []) ++
+        [retry: false]
+
+    case Req.post("https://#{url}/admin/oauth/access_token", req_opts) do
+      {:ok, %{status: 200, body: response_body}} when is_map(response_body) ->
+        {:ok, response_body}
+
+      {:ok, %{status: status, body: response_body}} ->
+        Logger.error(
+          "[Shopifex.Auth] Token migration failed for #{url}: #{status} - #{inspect(response_body)}"
+        )
+
+        {:error, {:migrate_failed, status, response_body}}
+
+      {:error, exception} ->
+        Logger.error(
+          "[Shopifex.Auth] Token migration request failed for #{url}: #{inspect(exception)}"
+        )
+
+        {:error, {:migrate_request_failed, exception}}
+    end
+  end
+
+  # Deliberately not `persist_refreshed_shop/2`: its compare-and-persist guard
+  # treats a changed access_token as a concurrent exchange to yield to, but for
+  # a migration a changed access_token is the expected result. Discarding it
+  # would strand the shop, since Shopify has already destroyed the old token.
+  defp persist_migrated_shop(shop, body) do
+    schema = shop_schema()
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    scope_field = Shopifex.Shops.get_scope_field()
+
+    attrs =
+      %{
+        access_token: body["access_token"],
+        token_expires_at: expires_at(now, body["expires_in"]),
+        refresh_token: body["refresh_token"],
+        refresh_token_expires_at: expires_at(now, body["refresh_token_expires_in"])
+      }
+      |> Map.put(scope_field, body["scope"] || Shopifex.Shops.get_scope(shop))
+
+    result =
+      repo().transaction(fn ->
+        case repo().one(from(s in schema, where: s.id == ^shop.id, lock: "FOR UPDATE")) do
+          nil ->
+            repo().rollback(:shop_not_found)
+
+          locked_shop ->
+            case locked_shop |> schema.changeset(attrs) |> repo().update() do
+              {:ok, migrated} -> migrated
+              {:error, changeset} -> repo().rollback({:persist_failed, changeset, attrs})
+            end
+        end
+      end)
+
+    case result do
+      {:ok, migrated} ->
+        Logger.info(
+          "[Shopifex.Auth] Migrated #{Shopifex.Shops.get_url(migrated)} to an expiring offline token"
+        )
+
+        {:ok, migrated}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

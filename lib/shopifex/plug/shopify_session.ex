@@ -87,11 +87,15 @@ defmodule Shopifex.Plug.ShopifySession do
   defp redirect_to_install(conn, shop_url) do
     Logger.info("Initiating shop installation for #{shop_url}")
 
-    install_url =
-      "https://#{shop_url}/admin/oauth/authorize?client_id=#{Application.fetch_env!(:shopifex, :api_key)}&scope=#{Application.fetch_env!(:shopifex, :scopes)}&redirect_uri=#{Application.fetch_env!(:shopifex, :redirect_uri)}"
+    query =
+      URI.encode_query(%{
+        "client_id" => Application.fetch_env!(:shopifex, :api_key),
+        "scope" => Application.fetch_env!(:shopifex, :scopes),
+        "redirect_uri" => Application.fetch_env!(:shopifex, :redirect_uri)
+      })
 
     conn
-    |> redirect(external: install_url)
+    |> redirect(external: "https://#{shop_url}/admin/oauth/authorize?#{query}")
     |> halt()
   end
 

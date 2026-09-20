@@ -109,8 +109,15 @@ defmodule Shopifex.Plug.EnsureScopes do
 
     message = Keyword.get(opts, :message)
 
+    query =
+      URI.encode_query(%{
+        "client_id" => Application.fetch_env!(:shopifex, :api_key),
+        "scope" => all_scopes_to_request,
+        "redirect_uri" => Application.fetch_env!(:shopifex, :reinstall_uri)
+      })
+
     reinstall_url =
-      "https://#{Shopifex.Shops.get_url(shop)}/admin/oauth/authorize?client_id=#{Application.fetch_env!(:shopifex, :api_key)}&scope=#{all_scopes_to_request}&redirect_uri=#{Application.fetch_env!(:shopifex, :reinstall_uri)}"
+      "https://#{Shopifex.Shops.get_url(shop)}/admin/oauth/authorize?#{query}"
 
     conn
     |> put_view(ShopifexWeb.PageHTML)

@@ -93,9 +93,10 @@ defmodule Shopifex.Test do
 
   @doc """
   Prepares a conn to pass the `:shopify_webhook` pipeline: assigns `raw_body` and
-  sets a matching `x-shopify-hmac-sha256` header. Set the shop on the conn's
-  params (`myshopify_domain` / `shop`) or header yourself, or use the
-  `x-shopify-shop-domain` header.
+  sets a matching `x-shopify-hmac-sha256` header. Identify the shop with the
+  `x-shopify-shop-domain` request header (or a `myshopify_domain` in the signed
+  body) — `Shopifex.Plug.ShopifyWebhook` resolves the shop from those, not from a
+  query/body param a caller could shadow.
   """
   @spec put_webhook_hmac(Plug.Conn.t(), binary(), keyword()) :: Plug.Conn.t()
   def put_webhook_hmac(conn, raw_body, opts \\ []) do

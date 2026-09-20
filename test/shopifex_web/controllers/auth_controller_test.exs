@@ -26,8 +26,14 @@ defmodule ShopifexWeb.AuthControllerTest do
 
     [location] = Plug.Conn.get_resp_header(conn, "location")
 
-    assert location ==
-             "https://shopifex.myshopify.com/admin/oauth/authorize?client_id=thisisafakeapikey&scope=orders&redirect_uri=https://shopifex-dummy.com/auth/install"
+    assert location =~ "https://shopifex.myshopify.com/admin/oauth/authorize?"
+
+    # Assert the decoded query rather than an exact string — the params are
+    # URI-encoded, so key order and escaping are not part of the contract.
+    params = location |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+    assert params["client_id"] == "thisisafakeapikey"
+    assert params["scope"] == "orders"
+    assert params["redirect_uri"] == "https://shopifex-dummy.com/auth/install"
 
     assert conn.status == 302
   end

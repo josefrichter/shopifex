@@ -84,7 +84,9 @@ defmodule Shopifex.Plug do
           locale :: Gettext.locale()
         ) :: Plug.Conn.t()
   def build_session(conn, shop, host, locale \\ "en") do
-    Gettext.put_locale(locale || "en")
+    # A non-binary `locale` (e.g. `?locale[]=x`, which parses to a list) would
+    # crash `Gettext.put_locale/1`; fall back to the default instead.
+    Gettext.put_locale(if is_binary(locale), do: locale, else: "en")
 
     shopifex_private_data = %{
       shop: shop,
@@ -162,10 +164,36 @@ defmodule Shopifex.Plug do
 
   def hmac_matches?(_conn, _received), do: false
 
-  @spec get_hmac(conn :: Plug.Conn.t()) :: String.t() | nil
-  def get_hmac(%Plug.Conn{params: %{"hmac" => hmac}}), do: String.downcase(hmac)
+  @doc """
+  Constant-time check that a Shopify **webhook** request is authentic: the
+  Base64 `x-shopify-hmac-sha256` header against the HMAC of the raw request
+  body (`conn.assigns[:raw_body]`). Tries the rotated `:old_secret` when set.
 
-  def get_hmac(%Plug.Conn{params: %{"signature" => signature}}), do: String.downcase(signature)
+  Unlike `hmac_matches?/2`, this reads the signature only from the header and
+  computes only over the body, so a query-string `hmac`/`signature` a caller
+  appended to the URL is never consulted. Returns `false` when the header is
+  absent, empty, or the raw body was not captured.
+  """
+  @spec valid_webhook_hmac?(conn :: Plug.Conn.t()) :: boolean()
+  def valid_webhook_hmac?(%Plug.Conn{} = conn) do
+    with [received] <- Plug.Conn.get_req_header(conn, "x-shopify-hmac-sha256"),
+         true <- is_binary(received) and received != "",
+         raw_body when is_binary(raw_body) or is_list(raw_body) <- conn.assigns[:raw_body] do
+      Enum.any?(secrets(), fn secret ->
+        expected = :crypto.mac(:hmac, :sha256, secret, raw_body) |> Base.encode64()
+        Plug.Crypto.secure_compare(expected, received)
+      end)
+    else
+      _ -> false
+    end
+  end
+
+  @spec get_hmac(conn :: Plug.Conn.t()) :: String.t() | nil
+  def get_hmac(%Plug.Conn{params: %{"hmac" => hmac}}) when is_binary(hmac),
+    do: String.downcase(hmac)
+
+  def get_hmac(%Plug.Conn{params: %{"signature" => signature}}) when is_binary(signature),
+    do: String.downcase(signature)
 
   def get_hmac(%Plug.Conn{} = conn) do
     # The `x-shopify-hmac-sha256` webhook header is Base64 — return it verbatim

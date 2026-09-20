@@ -34,7 +34,8 @@ defmodule Shopifex.TestTest do
     raw = ~s({"id": 1})
 
     conn =
-      %{Plug.Test.conn(:post, "/webhook") | params: %{"myshopify_domain" => @shop}}
+      Plug.Test.conn(:post, "/webhook")
+      |> Plug.Conn.put_req_header("x-shopify-shop-domain", @shop)
       |> put_webhook_hmac(raw)
 
     refute ShopifyWebhook.call(conn, []).halted

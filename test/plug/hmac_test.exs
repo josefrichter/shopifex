@@ -154,7 +154,13 @@ defmodule Shopifex.Plug.HmacTest do
     end
 
     defp webhook_conn(raw, hmac) do
-      %{Plug.Test.conn(:post, "/webhook") | params: %{"myshopify_domain" => "wh.myshopify.com"}}
+      # The shop domain rides in the HMAC-verified body (what `Plug.Parsers`
+      # puts in `body_params`), not the merged `params` a query could shadow.
+      %{
+        Plug.Test.conn(:post, "/webhook")
+        | body_params: %{"myshopify_domain" => "wh.myshopify.com"},
+          params: %{"myshopify_domain" => "wh.myshopify.com"}
+      }
       |> Plug.Conn.assign(:raw_body, raw)
       |> Plug.Conn.put_req_header("x-shopify-hmac-sha256", hmac)
     end
@@ -199,7 +205,11 @@ defmodule Shopifex.Plug.HmacTest do
       raw = ~s({"id": 7, "topic": "orders/create"})
       hmac = :crypto.mac(:hmac, :sha256, secret, raw) |> Base.encode64()
 
-      %{Plug.Test.conn(:post, "/webhook") | params: %{"myshopify_domain" => "rot.myshopify.com"}}
+      %{
+        Plug.Test.conn(:post, "/webhook")
+        | body_params: %{"myshopify_domain" => "rot.myshopify.com"},
+          params: %{"myshopify_domain" => "rot.myshopify.com"}
+      }
       |> Plug.Conn.assign(:raw_body, raw)
       |> Plug.Conn.put_req_header("x-shopify-hmac-sha256", hmac)
     end

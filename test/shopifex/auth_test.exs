@@ -568,6 +568,142 @@ defmodule Shopifex.AuthTest do
     task
   end
 
+  describe "migrate_to_expiring_token/1" do
+    test "exchanges a non-expiring token and persists all four columns" do
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = URI.decode_query(body)
+
+        # The distinguishing feature of this grant: the subject token is the
+        # access token itself, typed as an offline access token (not an id_token).
+        assert params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+        assert params["subject_token"] == "legacy_non_expiring"
+
+        assert params["subject_token_type"] ==
+                 "urn:shopify:params:oauth:token-type:offline-access-token"
+
+        assert params["requested_token_type"] ==
+                 "urn:shopify:params:oauth:token-type:offline-access-token"
+
+        assert params["expiring"] == "1"
+
+        Req.Test.json(conn, token_response())
+      end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "legacy-mig.myshopify.com",
+          scope: "read_orders",
+          access_token: "legacy_non_expiring",
+          token_expires_at: nil,
+          refresh_token: nil
+        })
+
+      assert {:ok, migrated} = Auth.migrate_to_expiring_token(shop)
+      assert migrated.access_token == "new_access_token"
+      assert migrated.refresh_token == "new_refresh_token"
+      assert migrated.token_expires_at
+      assert migrated.refresh_token_expires_at
+    end
+
+    test "refuses a shop that already has an expiring token" do
+      # No stub: reaching the network would raise and fail the test.
+      shop =
+        Shops.create_shop(%{
+          url: "already-mig.myshopify.com",
+          scope: "read_orders",
+          access_token: "tok",
+          token_expires_at: later()
+        })
+
+      assert {:error, :already_expiring} = Auth.migrate_to_expiring_token(shop)
+    end
+
+    test "refuses a shop with no access_token" do
+      # A bare struct — the changeset requires access_token, and this branch
+      # returns before any DB or network access anyway.
+      shop = %ShopifexDummy.Shop{
+        url: "no-token-mig.myshopify.com",
+        scope: "read_orders",
+        access_token: nil,
+        token_expires_at: nil
+      }
+
+      assert {:error, :no_access_token} = Auth.migrate_to_expiring_token(shop)
+    end
+
+    test "surfaces a Shopify rejection without touching the shop row" do
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => "invalid_subject_token"})
+      end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "reject-mig.myshopify.com",
+          scope: "read_orders",
+          access_token: "legacy",
+          token_expires_at: nil
+        })
+
+      capture_log(fn ->
+        assert {:error, {:migrate_failed, 400, _body}} = Auth.migrate_to_expiring_token(shop)
+      end)
+
+      reloaded = Shops.get_shop_by_url("reject-mig.myshopify.com")
+      assert reloaded.access_token == "legacy"
+      assert is_nil(reloaded.token_expires_at)
+    end
+
+    test "never retries — one attempt even when the host app enables retries globally" do
+      original = Application.get_env(:shopifex, :req_options, [])
+      Application.put_env(:shopifex, :req_options, original ++ [retry: :transient])
+      on_exit(fn -> Application.put_env(:shopifex, :req_options, original) end)
+
+      attempts = :counters.new(1, [:atomics])
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        :counters.add(attempts, 1, 1)
+        conn |> Plug.Conn.put_status(503) |> Req.Test.json(%{"error" => "unavailable"})
+      end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "no-retry-mig.myshopify.com",
+          scope: "read_orders",
+          access_token: "legacy",
+          token_expires_at: nil
+        })
+
+      capture_log(fn ->
+        assert {:error, {:migrate_failed, 503, _}} = Auth.migrate_to_expiring_token(shop)
+      end)
+
+      assert :counters.get(attempts, 1) == 1
+    end
+
+    test "returns :shop_not_found when the row disappears before the write" do
+      parent = self()
+
+      Req.Test.stub(Shopifex.ReqStub, fn conn ->
+        send(parent, :migration_exchanged)
+        Req.Test.json(conn, token_response())
+      end)
+
+      shop =
+        Shops.create_shop(%{
+          url: "vanishing-mig.myshopify.com",
+          scope: "read_orders",
+          access_token: "legacy",
+          token_expires_at: nil
+        })
+
+      Shops.delete_shop(shop)
+
+      assert {:error, :shop_not_found} = Auth.migrate_to_expiring_token(shop)
+      assert_received :migration_exchanged
+    end
+  end
+
   defp start_task(task_supervisor, fun, opts \\ []) do
     task =
       Task.Supervisor.async_nolink(task_supervisor, fn ->

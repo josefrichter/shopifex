@@ -1,5 +1,7 @@
 defmodule Shopifex.ChargeBindingTest do
-  use ExUnit.Case, async: true
+  # async: false — one test rotates the global :secret/:old_secret app env,
+  # which other async modules read for HMAC/session-token signing.
+  use ExUnit.Case, async: false
 
   alias Shopifex.ChargeBinding
 
