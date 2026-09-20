@@ -1,42 +1,40 @@
 defmodule ShopifexWeb.WebhookController do
   @moduledoc """
-  You can use this module inside of another one of your application controllers.
-  The conn, shop and topic will be called by handle_topic/3 which you can define in your parent controller.
+  Dispatches verified Shopify webhooks to a handle_topic/3 clause you define in
+  your own controller.
 
-  Example:
+  `use ShopifexWeb.WebhookController` wires up an action/2 that calls
+  `handle_topic(conn, shop, topic)`, where `topic` comes from the
+  `x-shopify-topic` header (a missing or duplicated header is rejected with
+  `400`). Add a clause per topic you subscribe to:
 
   ```elixir
   use ShopifexWeb.WebhookController
 
+  # `app/uninstalled` has no built-in default — handle it yourself.
   def handle_topic(conn, shop, "app/uninstalled") do
     Shopifex.Shops.delete_shop(shop)
-
-    conn
-    |> send_resp(200, "success")
+    send_resp(conn, 200, "success")
   end
+  ```
 
-  # Mandatory Shopify shop data erasure GDPR webhook. Simply delete the shop record
-  def handle_topic(conn, shop, "shop/redact") do
-    Shopifex.Shops.delete_shop(shop)
+  ## Built-in GDPR compliance defaults
 
-    conn
-    |> send_resp(204, "")
-  end
+  This module ships default clauses for Shopify's three mandatory compliance
+  (GDPR) topics so a fresh app passes review without extra code:
 
-  # Mandatory Shopify customer data erasure GDPR webhook. Simply delete the shop (customer) record
-  def handle_topic(conn, shop, "customers/redact") do
-    Shopifex.Shops.delete_shop(shop)
+    * `customers/data_request` — acknowledges with `200` (touches no data).
+    * `customers/redact` — acknowledges with `200` (touches no data). Delete
+      customer data here if your app stores any.
+    * `shop/redact` — deletes the shop record (when one is loaded) and responds
+      `200`.
 
-    conn
-    |> send_resp(204, "")
-  end
+  handle_topic/3 is `defoverridable`. **Defining your own handle_topic/3
+  replaces *all* of these defaults**, including the GDPR clauses. To keep them,
+  add a catch-all that delegates to super/3:
 
-  # Mandatory Shopify customer data request GDPR webhook.
-  def handle_topic(conn, _shop, "customers/data_request") do
-    # Send an email of the shop data to the customer.
-    conn
-    |> send_resp(202, "Accepted")
-  end
+  ```elixir
+  def handle_topic(conn, shop, topic), do: super(conn, shop, topic)
   ```
   """
   defmacro __using__(_opts) do

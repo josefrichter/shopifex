@@ -10,7 +10,7 @@ defmodule Shopifex.TokenRefreshLease do
   Shopify accepts the token but before the new pair is persisted still
   requires a fresh managed-install exchange.
 
-  Existing Shopifex 3 consumers must create the table before using expiring
+  Existing consumers of this branch must create the table before using expiring
   offline-token refresh:
 
       create table(:shopifex_token_refresh_leases, primary_key: false) do

@@ -84,7 +84,8 @@ Replace the tunnel URL with your own where applicable.
 ## Manual Installation
 Create the shop schema where the installation data will be stored. Include the
 token-lifecycle columns so Shopify's **expiring** offline tokens (required for
-public apps from April 1, 2026) can be refreshed in the background:
+public apps' GraphQL Admin API requests from January 1, 2027) can be refreshed
+in the background:
 ```
 mix phx.gen.schema Shop shops url:string access_token:string scope:string \
   token_expires_at:utc_datetime refresh_token:string refresh_token_expires_at:utc_datetime
@@ -115,7 +116,7 @@ Add the `:shopifex` config settings to your `config.ex`. More config details in 
 config :shopifex,
   app_name: "MyApp",
   shop_schema: MyApp.Shop,
-  web_module: MyAppWeb,
+  web_module: MyAppWeb, # emitted by mix shopifex.install; not read by the library itself
   repo: MyApp.Repo,
   webhook_uri: "https://myapp.ngrok.io/webhook",
   scopes: "read_inventory,write_inventory,read_products,write_products,read_orders",
@@ -220,6 +221,16 @@ defmodule MyAppWeb.AuthController do
   end
 end
 ```
+
+> **Which install callback fires?** The `after_install/3` and `insert_shop/1`
+> callbacks shown here are the **legacy OAuth** `AuthController` callbacks — they
+> run only in the authorization-code `install/2` flow. **Managed installation
+> runs in a plug, before any controller**, so it does not call them. For
+> managed-install side effects, configure `Shopifex.ManagedInstall.Callbacks` —
+> `insert_shop/1`, `after_install/1` (first install only), and `after_exchange/2`
+> (every token exchange, install and refresh) — via
+> `config :shopifex, managed_install_callbacks: MyApp.ManagedInstallCallbacks`.
+
 Setting up your application as a SPA? Read this before continuing [Single Page Applications](#single-page-applications)
 
 create another controller called `webhook_controller.ex` to handle incoming Shopify webhooks (optional)
@@ -359,10 +370,14 @@ and `@session_token` without redirecting when no shop is in the session.
 ## Update app permissions
 
 With managed installation, **change your access scopes in `shopify.app.toml`**
-(`[access_scopes]`) and deploy your app config — Shopify re-grants the scopes the
-next time the merchant loads the app, and `:managed_install` re-exchanges the
-token. `Shopifex.Plug.EnsureScopes` raises an actionable error if a shop is missing
-a required scope, so you find config drift fast.
+(`[access_scopes]`) and deploy your app config — Shopify grants the updated
+scopes when the merchant next installs/updates the app. Shopifex doesn't compare
+scopes or re-exchange because they changed; the stored `scope` is refreshed on
+the next token exchange (`:managed_install` re-exchanges on the token-expiry
+schedule, not on a scope change). `Shopifex.Plug.EnsureScopes` **raises** an
+actionable error by default when a shop is missing a required scope, so config
+drift surfaces immediately rather than silently bouncing the merchant through
+OAuth.
 
 > **Legacy OAuth scope update (compatibility only).** If you opt into the OAuth
 > fallback (`plug Shopifex.Plug.EnsureScopes, on_missing_scopes: :redirect`), add

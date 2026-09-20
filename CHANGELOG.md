@@ -15,10 +15,11 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 - **Minimum Elixir 1.15 and Phoenix 1.8.** Dropped `phoenix_view`,
   `phoenix_html_helpers`, and `plug_cowboy` — the library no longer pins a web
-  server (Bandit is the Phoenix 1.8 default) or the legacy view stack. CI
-  verifies Elixir 1.15.8/OTP 26.2 (minimum) and Elixir 1.18.2/OTP 27.3
-  (current) against Phoenix 1.8.8 / Phoenix LiveView 1.2.1 — see
-  `.github/workflows/ci.yml`.
+  server (Bandit is the Phoenix 1.8 default) or the legacy view stack.
+  `phoenix_live_view ~> 1.0` is now a hard dependency (2.x pulled in none), so
+  add it to your app's deps if it isn't already there. CI verifies Elixir
+  1.15.8/OTP 26.2 (minimum) and Elixir 1.18.2/OTP 27.3 (current) against Phoenix
+  1.8.8 / Phoenix LiveView 1.2.1 — see `.github/workflows/ci.yml`.
 - **View layer is function components.** `Phoenix.View` modules + `.eex`
   templates were replaced by `*HTML` modules with co-located `.heex`
   templates. If you rendered Shopifex views directly, update to
@@ -52,8 +53,11 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   before creating a `Grant`. Any custom `select_plan`-style action **must**
   call `bind_charge/4` before redirecting to Shopify's confirmation URL, or
   `complete_payment/2` rejects the return with `403`. `create_charge/2` is
-  also an overridable callback. Charge ids are strings throughout this path
-  (the trailing numeric segment of a GraphQL GID), not integers.
+  also an overridable callback. `complete_payment/2` coerces the charge id (the
+  trailing numeric segment of a GraphQL GID) to an integer with `Integer.parse/1`;
+  the `:redirect_after_agent` store, `create_grant/3` (spec `charge_id ::
+  pos_integer()`), and the `Grant.charge_id` `:bigint` column all key on that
+  integer — only `verify_charge/3` receives the string form (to rebuild the GID).
   `Shopifex.RedirectAfterAgent` (and `Shopifex.RedirectAfter.Ecto`) now store
   opaque signed charge-binding strings, not raw redirect URLs — a custom
   `:redirect_after_agent` implementation must round-trip whatever
@@ -72,11 +76,6 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   into the 2.x redirect with
   `plug Shopifex.Plug.EnsureScopes, on_missing_scopes: :redirect` (or
   `config :shopifex, :ensure_scopes_on_missing, :redirect`).
-- **`Shopifex.API.graphql/3` has a new error shape.** A *terminal* token
-  refresh failure (expired/missing refresh token, a 400/401 from Shopify's
-  token endpoint, or shop not found) now returns
-  `{:error, {:token_refresh_failed, reason}}` instead of a generic
-  `{:error, {401, body}}` or crashing the request.
 - **Generated Grant/Plan schemas changed nullability.** `mix shopifex.install`
   now generates `Grant.charge_id`, `Grant.remaining_usages`, and `Plan.usages`
   as nullable (unlimited plans have no usage cap; `create_shop_grant/2` never
@@ -101,6 +100,20 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 - **`Shopifex.Plug.ShopifySession` reads `shop` from the HMAC-signed query
   params, not the request params.** A POST body `shop` can no longer override
   the signed value used to look up and build the session.
+- **`Shopifex.Plug.ShopifyWebhook` verifies the webhook body HMAC and resolves
+  the shop from trusted sources only.** It gained a `:mode` option. In the
+  default `:webhook` mode it checks the `x-shopify-hmac-sha256` header against
+  the HMAC of the raw request body (new helper
+  `Shopifex.Plug.valid_webhook_hmac?/1`) — a query-string `hmac` is ignored —
+  and resolves the shop from the `x-shopify-shop-domain` header or the
+  HMAC-verified body, never the merged `conn.params` (which a request body could
+  shadow). Admin/bulk-action links use `mode: :admin_link` (set by the
+  `:shopify_admin_link` pipeline), which verifies the query HMAC and a fresh
+  timestamp and resolves the shop from the signed query.
+- **`Shopifex.Plug.LoadProxyShop` reads the shop from the signed
+  `conn.query_params`, not `conn.params`.** Shopify signs only the app-proxy
+  query, so a `POST` body can no longer shadow the `shop` used to resolve the
+  proxy request's shop.
 - **`initialize_installation` validates the shop domain with an anchored
   pattern** (`Shopifex.ShopDomain.valid?/1`) instead of an unanchored regex,
   closing an open-redirect vector (a crafted `shop` value could previously
@@ -146,7 +159,7 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   short final transaction (`SELECT ... FOR UPDATE`) re-checks token fields
   before persisting, so a concurrent managed-install exchange is never
   overwritten. Fresh installer migrations include the leases table; existing
-  Shopifex 3 consumers must add the documented migration.
+  consumers of this branch must add the documented migration.
 - **`Shopifex.Auth.fresh_token/1`** — public, returns `{:ok, shop} | {:error, reason}`
   (distinct from `ensure_fresh_token/1`, which always returns a shop and
   swallows the error). `Shopifex.Auth.terminal_refresh_error?/1` classifies a
@@ -171,7 +184,11 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   fails immediately. Each attempt uses a 5s connect / 10s receive timeout.
   Override via `config :shopifex, :req_options`.
 - `Shopifex.API` — single GraphQL Admin API transport with a configurable
-  `api_version` (default `2026-07`) and errors-take-precedence handling.
+  `api_version` (default `2026-07`) and errors-take-precedence handling. A
+  *terminal* token-refresh failure (expired/missing refresh token, a 400/401
+  from Shopify's token endpoint, or shop not found) surfaces as
+  `{:error, {:token_refresh_failed, reason}}` rather than a generic
+  `{:error, {401, body}}` or a crashed request.
 - `Shopifex.SessionToken` — strict HS256 verification of App Bridge session
   tokens, with `:expired` distinct from other errors.
 - `Shopifex.Plug.ShopifyApiAuth` — session-token auth for the API pipelines.
@@ -310,6 +327,12 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   safe across nodes (see Added), and `mix shopifex.install` now generates it as
   the default for new apps; (2) when the lookup misses, `complete_payment/2`
   logs an actionable `Logger.error` instead of failing silently.
+- **Legacy OAuth authorization URLs are properly encoded.**
+  `Shopifex.Plug.ShopifySession`'s install redirect and
+  `Shopifex.Plug.EnsureScopes`'s re-authorization redirect now build their query
+  string with `URI.encode_query/1`, so `scope` and `redirect_uri` are
+  percent-encoded rather than interpolated raw. Also removed an unused
+  `require Logger` from `Shopifex.Plug.ShopifyApiAuth`.
 
 ### Changed
 

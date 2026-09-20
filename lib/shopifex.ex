@@ -34,8 +34,10 @@ defmodule Shopifex do
   `https://your-app/auth`. New apps use **managed installation** — Shopify
   sends an `id_token` on every embedded load, which
   `Shopifex.Plug.ManagedInstall` verifies (`Shopifex.SessionToken`) and
-  exchanges for an offline access token. No OAuth-redirect dance, no tokens in
-  URLs.
+  exchanges for an offline access token — no OAuth-redirect dance. (App Bridge
+  still appends its short-lived `id_token` to each embedded load, and the
+  library forwards it on the initial `/auth` hop; you just don't mint or thread
+  an app token yourself the way 2.x did.)
 
   ## Authentication model
 
@@ -53,7 +55,8 @@ defmodule Shopifex do
 
   ## Expiring offline access tokens
 
-  Required for new public apps as of 2026-04-01. Tokens have a ~1h TTL and a
+  Required for public apps' GraphQL Admin API requests as of 2027-01-01 (custom
+  and merchant-created apps are exempt). Tokens have a ~1h TTL and a
   90-day, one-time-use refresh token. Shopifex keeps them fresh on every path:
 
   - **Embedded** — `ManagedInstall` re-exchanges the `id_token` before expiry.

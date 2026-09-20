@@ -24,8 +24,8 @@ mix deps.update shopifex
 ## 2. Migrations
 
 Add the token-lifecycle columns to your shop table. All four are nullable so
-existing (non-expiring) installs round-trip unchanged until they next go
-through managed installation:
+existing (non-expiring) installs round-trip unchanged — they keep working on
+their non-expiring token (see §10 to move them onto expiring tokens):
 
 ```
 mix ecto.gen.migration add_token_lifecycle_to_shops
@@ -74,7 +74,7 @@ end
 If you use the billing (`PaymentGuard`) flow and run on more than one node,
 add the persistent redirect-after table so a payment confirmation that lands
 on a different node than the one that started checkout doesn't drop the
-grant (see [`Shopifex.RedirectAfter.Ecto`](../lib/shopifex/redirect_after/ecto.ex)):
+grant (see `Shopifex.RedirectAfter.Ecto`):
 
 ```
 mix ecto.gen.migration create_shopifex_charge_redirects
@@ -222,9 +222,14 @@ unrecognised response and reject the charge with `403`.
 requests); if you overrode `use_grant/2`, make sure your implementation
 handles a `nil` result the same way the plug does (treat it as "no grant").
 
-Charge ids are strings throughout this path now (the trailing numeric
-segment of a GraphQL GID), not integers — if your app stores or compares
-`charge_id` anywhere outside the generated `Grant` schema, check the type.
+Charge ids flow as **integers** through the grant/redirect path. The GraphQL
+GID's trailing segment is a string, but `complete_payment/2` coerces it with
+`Integer.parse/1`; the `:redirect_after_agent` store, `create_grant/3` (spec
+`charge_id :: pos_integer()`), and the `Grant.charge_id` `:bigint` column all
+key on that integer. Only `verify_charge/3` receives the string form (to build
+the GID). If you implement a custom `:redirect_after_agent`, key it by the
+integer `charge_id` — keying by string will miss the lookup and silently drop
+the grant.
 
 ## 8. API
 
@@ -274,7 +279,37 @@ end
 navigation; use a plain `<.link navigate={...}>` between LiveViews in the
 same `live_session`.
 
-## 10. Smoke-test checklist after upgrading
+## 10. Backfill legacy shops onto expiring tokens (optional)
+
+Shops installed before expiring offline tokens existed have `nil` expiry
+columns. They keep working on their non-expiring access token, but they are
+**not** upgraded automatically — `Shopifex.Plug.ManagedInstall` treats a `nil`
+`token_expires_at` as fresh, so an embedded load never re-exchanges them. To
+move them onto expiring tokens (and gain background refresh), back-fill with
+`Shopifex.Auth.migrate_to_expiring_token/1`, or have the merchant reinstall.
+
+The exchange is **one-way and never retried** — Shopify destroys the
+non-expiring token as it issues the expiring pair. Idempotence lives in the
+selection, not the call: a shop that already has a `token_expires_at` returns
+`{:error, :already_expiring}`.
+
+```elixir
+import Ecto.Query
+
+MyApp.Repo.all(from s in MyApp.Shop, where: is_nil(s.token_expires_at))
+|> Enum.each(fn shop ->
+  case Shopifex.Auth.migrate_to_expiring_token(shop) do
+    {:ok, _migrated} -> :ok
+    {:error, reason} -> MyApp.report_migration_failure(shop, reason)
+  end
+end)
+```
+
+Run it as a one-off (e.g. from `bin/my_app remote`), not on the hot request
+path. See `Shopifex.Auth.migrate_to_expiring_token/1` for the full list of
+`{:error, reason}` values.
+
+## 11. Smoke-test checklist after upgrading
 
 - **Install** a fresh dev store end-to-end (`/auth` → managed installation →
   landing page loads with `@current_shop` set).

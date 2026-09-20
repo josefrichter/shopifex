@@ -72,8 +72,8 @@ defmodule ShopifexWeb.LiveSession do
 
   1. HTTP request arrives with `id_token` from App Bridge
   2. `ManagedInstall` plug validates the token and builds a Shopifex session
-  3. `put_shop_in_session/1` serializes the shop into the LiveView session
-  4. This hook reads the shop from the session — no tokens needed
+  3. `put_shop_in_session/1` serializes the shop's **URL** (not the struct) into the LiveView session
+  4. This hook reloads the shop from the session's `shop_url` server-side — no tokens needed
 
   Within a `live_session`, LiveView preserves the session across navigations.
   Full page loads get a fresh `id_token` from App Bridge automatically.
