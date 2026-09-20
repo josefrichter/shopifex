@@ -13,7 +13,9 @@ defmodule Shopifex.Plug.ManagedInstall do
      (`access_token`, `token_expires_at`, `refresh_token`,
      `refresh_token_expires_at`).
   3. If the shop exists but its stored access token is within ~10 minutes of
-     expiry (`token_expires_at`) or already expired, it re-exchanges to refresh.
+     expiry (`token_expires_at`) or already expired — or its stored scopes lack
+     any scope in `config :shopifex, :scopes` (a merchant approved a scope
+     update) — it re-exchanges, which also persists Shopify's current grant.
   4. Otherwise it builds the session from the stored shop directly.
 
   New installs are persisted through the configurable
@@ -108,21 +110,41 @@ defmodule Shopifex.Plug.ManagedInstall do
         exchange_token_and_upsert_shop(conn, id_token, shop_url, _new? = true, _fallback = nil)
 
       shop ->
-        if token_stale?(shop) do
-          Logger.info("[Shopifex.ManagedInstall] Refreshing access_token for #{shop_url}")
+        cond do
+          token_stale?(shop) ->
+            Logger.info("[Shopifex.ManagedInstall] Refreshing access_token for #{shop_url}")
+            exchange_token_and_upsert_shop(conn, id_token, shop_url, _new? = false, shop)
 
-          exchange_token_and_upsert_shop(
-            conn,
-            id_token,
-            shop_url,
-            _new? = false,
-            _fallback = shop
-          )
-        else
-          build_session_from_shop(conn, shop)
+          scopes_missing?(shop) ->
+            Logger.info(
+              "[Shopifex.ManagedInstall] Stored scopes for #{shop_url} lack configured scopes, re-exchanging"
+            )
+
+            exchange_token_and_upsert_shop(conn, id_token, shop_url, _new? = false, shop)
+
+          true ->
+            build_session_from_shop(conn, shop)
         end
     end
   end
+
+  # A merchant who approved newly configured scopes (a managed-install scope
+  # update) still has the old scope list stored. With a fresh token the exchange
+  # would otherwise be skipped and `EnsureScopes` would raise until the token
+  # reached the refresh window — never, for a nil-expiry shop. Re-exchanging
+  # returns Shopify's current grant, which `TokenResponse` persists. If the
+  # grant is still short, `EnsureScopes` raises as before.
+  defp scopes_missing?(shop) do
+    required = split_scopes(Application.get_env(:shopifex, :scopes, ""))
+    granted = split_scopes(Shopifex.Shops.get_scope(shop))
+
+    required -- granted != []
+  end
+
+  defp split_scopes(nil), do: []
+
+  defp split_scopes(scopes) when is_binary(scopes),
+    do: scopes |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
 
   # Staleness is measured against `token_expires_at` — the token's actual lifetime
   # — NOT the row's `updated_at`, which any unrelated shop update would reset (an

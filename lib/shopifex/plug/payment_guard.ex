@@ -49,9 +49,12 @@ defmodule Shopifex.Plug.PaymentGuard do
         params =
           %{
             "guard_identifier" => guard_identifier,
-            "redirect_after" => redirect_after
+            "redirect_after" => redirect_after,
+            "timestamp" => Integer.to_string(System.system_time(:second))
           }
-          |> maybe_put_token(Shopifex.Plug.session_token(conn))
+          |> maybe_put("shop", shop && Shopifex.Shops.get_url(shop))
+          |> maybe_put("token", Shopifex.Plug.session_token(conn))
+          |> sign_redirect()
 
         show_plans_url = "#{prefix}/payment/show-plans?#{URI.encode_query(params)}"
 
@@ -61,6 +64,16 @@ defmodule Shopifex.Plug.PaymentGuard do
     end
   end
 
-  defp maybe_put_token(params, nil), do: params
-  defp maybe_put_token(params, token), do: Map.put(params, "token", token)
+  defp maybe_put(params, _key, nil), do: params
+  defp maybe_put(params, key, value), do: Map.put(params, key, value)
+
+  # Sign the redirect the way Shopify signs an app load (`hmac` over the sorted
+  # query, plus a `timestamp`), so the show-plans route's `:shopify_session`
+  # pipeline accepts it even when the blocked request carried no App Bridge
+  # `id_token` — legacy HMAC-authenticated and non-embedded apps. When an
+  # `id_token` is present it is forwarded as `token` and used first.
+  defp sign_redirect(params) do
+    secret = Application.fetch_env!(:shopifex, :secret)
+    Map.put(params, "hmac", Shopifex.Plug.query_string_hmac(params, "&", secret))
+  end
 end

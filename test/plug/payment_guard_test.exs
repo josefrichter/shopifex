@@ -25,6 +25,55 @@ defmodule Shopifex.Plug.PaymentGuardTest do
     assert html_response(conn_follow_redirect, 200) =~ "Payment options"
   end
 
+  test "redirect stays authenticated for an HMAC-only session (no App Bridge id_token)", %{
+    shop: shop
+  } do
+    # A legacy / non-embedded request authenticated by the signed query carries
+    # no id_token to forward, so the guard signs the redirect itself (hmac +
+    # timestamp + shop) and the show-plans route's :shopify_session accepts it.
+    conn =
+      build_conn(:get, "/premium-route?foo=bar")
+      |> Shopifex.Plug.build_session(shop, nil, "en")
+
+    refute Shopifex.Plug.session_token(conn)
+
+    halted_conn = Shopifex.Plug.PaymentGuard.call(conn, "block")
+    [redirect_location] = Plug.Conn.get_resp_header(halted_conn, "location")
+
+    query = redirect_location |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+    assert query["shop"] == shop.url
+    assert query["hmac"]
+    assert query["timestamp"]
+    refute Map.has_key?(query, "token")
+
+    followed = get(Phoenix.ConnTest.build_conn(), redirect_location)
+
+    assert html_response(followed, 200) =~ "Payment options"
+    assert Shopifex.Plug.current_shop(followed).url == shop.url
+  end
+
+  test "a tampered signed redirect is rejected", %{shop: shop} do
+    conn =
+      build_conn(:get, "/premium-route")
+      |> Shopifex.Plug.build_session(shop, nil, "en")
+
+    [redirect_location] =
+      conn
+      |> Shopifex.Plug.PaymentGuard.call("block")
+      |> Plug.Conn.get_resp_header("location")
+
+    # Point the signed redirect at another shop without re-signing it.
+    tampered =
+      String.replace(redirect_location, URI.encode_www_form(shop.url), "other.myshopify.com")
+
+    assert tampered != redirect_location
+
+    followed = get(Phoenix.ConnTest.build_conn(), tampered)
+
+    refute html_response(followed, 200) =~ "Payment options"
+    assert Shopifex.Plug.current_shop(followed) == nil
+  end
+
   test "show-plans escapes a malicious redirect_after (no inline-script breakout)", %{conn: conn} do
     payload = "</script><script>window.__xss=1</script>"
 

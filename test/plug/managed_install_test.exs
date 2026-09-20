@@ -212,10 +212,11 @@ defmodule Shopifex.Plug.ManagedInstallTest do
   # --- existing fresh shop ---------------------------------------------------
 
   test "existing fresh token: no re-exchange, even when an unrelated update aged updated_at" do
+    # Stored scopes satisfy config :scopes ("orders"), so only token age matters.
     shop =
       Shops.create_shop(%{
         url: @shop,
-        scope: "read_orders",
+        scope: "orders",
         access_token: "existing_token",
         token_expires_at:
           DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second),
@@ -232,6 +233,64 @@ defmodule Shopifex.Plug.ManagedInstallTest do
     refute_received :token_exchanged
     refute_received {:after_install, _}
     refute_received {:after_exchange, _}
+    assert Shopifex.Plug.current_shop(conn).access_token == "existing_token"
+  end
+
+  # --- existing shop, scope update -------------------------------------------
+
+  test "existing fresh token whose stored scopes lack a configured scope: re-exchanges and persists the new grant" do
+    # Merchant approved a scope update; the stored row still has the old list.
+    # A fresh token alone must not skip the exchange, or EnsureScopes would
+    # raise until the token aged into the refresh window.
+    Application.put_env(:shopifex, :scopes, "orders,read_products")
+    Application.put_env(:shopifex, :configure_webhooks_on_exchange?, false)
+
+    on_exit(fn ->
+      Application.put_env(:shopifex, :scopes, "orders")
+      Application.delete_env(:shopifex, :configure_webhooks_on_exchange?)
+    end)
+
+    Shops.create_shop(%{
+      url: @shop,
+      scope: "orders",
+      access_token: "fresh_token",
+      token_expires_at:
+        DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second),
+      refresh_token: "fresh_refresh"
+    })
+
+    parent = self()
+
+    Req.Test.stub(Shopifex.ReqStub, fn conn ->
+      send(parent, :token_exchanged)
+      Req.Test.json(conn, %{token_exchange_response() | "scope" => "orders,read_products"})
+    end)
+
+    conn =
+      ManagedInstall.call(conn_with(%{"id_token" => token(), "shop" => @shop, "host" => "h"}), [])
+
+    assert_received :token_exchanged
+    assert_received {:after_exchange, false}
+    refute_received {:after_install, _}
+
+    assert Shops.get_shop_by_url(@shop).scope == "orders,read_products"
+    assert Shopifex.Plug.current_shop(conn).scope == "orders,read_products"
+  end
+
+  test "existing fresh token with a superset of the configured scopes: no re-exchange" do
+    Shops.create_shop(%{
+      url: @shop,
+      scope: "orders,read_products",
+      access_token: "existing_token",
+      token_expires_at:
+        DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second),
+      refresh_token: "existing_refresh"
+    })
+
+    conn =
+      ManagedInstall.call(conn_with(%{"id_token" => token(), "shop" => @shop, "host" => "h"}), [])
+
+    refute_received :token_exchanged
     assert Shopifex.Plug.current_shop(conn).access_token == "existing_token"
   end
 

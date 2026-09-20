@@ -61,8 +61,10 @@ Relevant `shopify.dev` documentation:
   auto-upgrade a legacy shop on the next embedded load —
   `ManagedInstall.token_stale?/1` reads a `nil` `token_expires_at` as fresh — so
   an operator back-fills by looping the helper over `token_expires_at IS NULL`
-  (see `docs/upgrading.md`), or the merchant reinstalls. There is no built-in
-  batch/CLI wrapper.
+  (see `docs/upgrading.md`), or the merchant reinstalls. The one exception is a
+  legacy shop whose stored `scope` lacks a configured scope: `ManagedInstall`
+  re-exchanges it to pick up the new grant, and that exchange yields an expiring
+  pair. There is no built-in batch/CLI wrapper.
 
 - **OAuth `state`/nonce is not validated (row 10).** The legacy
   authorization-code grant in `ShopifexWeb.AuthController` accepts `state` and

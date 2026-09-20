@@ -48,9 +48,10 @@ defmodule Shopifex.Auth do
     for API calls. Such a shop is **not** upgraded automatically: opening the
     embedded app does not re-exchange it, because `Shopifex.Plug.ManagedInstall`
     treats a `nil` `token_expires_at` as fresh (its `token_stale?` guard returns
-    false for a nil expiry). To move a legacy shop onto expiring tokens,
-    back-fill it with `migrate_to_expiring_token/1` (see that function's docs)
-    or have the merchant reinstall the app.
+    false for a nil expiry). The exception is a stored `scope` that lacks a
+    configured scope, which does trigger a re-exchange. To move a legacy shop
+    onto expiring tokens, back-fill it with `migrate_to_expiring_token/1` (see
+    that function's docs) or have the merchant reinstall the app.
 
   - **If the refresh_token itself expires** (after 90 days of no refresh),
     Shopify returns 400 with `invalid_grant`. `refresh!/1` returns
@@ -199,7 +200,8 @@ defmodule Shopifex.Auth do
   reinstalls the app), `refresh!/1` returns `{:error, :no_refresh_token}` for
   that shop. Re-opening the embedded app does **not** upgrade it:
   `Shopifex.Plug.ManagedInstall` treats a `nil` `token_expires_at` as fresh (its
-  `token_stale?` guard returns false for a nil expiry) and never re-exchanges.
+  `token_stale?` guard returns false for a nil expiry) and re-exchanges only
+  when the stored `scope` lacks a configured scope.
 
   > #### Irreversible {: .warning}
   >

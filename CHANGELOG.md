@@ -333,6 +333,17 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   string with `URI.encode_query/1`, so `scope` and `redirect_uri` are
   percent-encoded rather than interpolated raw. Also removed an unused
   `require Logger` from `Shopifex.Plug.ShopifyApiAuth`.
+- **Managed install picks up approved scope updates.** When a shop's stored
+  `scope` lacks a scope listed in `config :shopifex, :scopes`,
+  `Shopifex.Plug.ManagedInstall` re-exchanges the `id_token` even though the
+  access token is still fresh, and persists Shopify's current grant. Previously
+  a merchant who had approved new scopes hit `EnsureScopes`'s raise until the
+  token aged into the refresh window — never, for a legacy nil-expiry shop.
+- **`Shopifex.Plug.PaymentGuard`'s redirect stays authenticated without an
+  App Bridge token.** The redirect to `/payment/show-plans` now carries the
+  shop, a `timestamp`, and an app-signed `hmac` (in addition to forwarding an
+  `id_token` as `token` when one is present), so a legacy HMAC-authenticated or
+  non-embedded request reaches the plans page instead of the store selector.
 
 ### Changed
 

@@ -284,8 +284,10 @@ same `live_session`.
 Shops installed before expiring offline tokens existed have `nil` expiry
 columns. They keep working on their non-expiring access token, but they are
 **not** upgraded automatically — `Shopifex.Plug.ManagedInstall` treats a `nil`
-`token_expires_at` as fresh, so an embedded load never re-exchanges them. To
-move them onto expiring tokens (and gain background refresh), back-fill with
+`token_expires_at` as fresh, so an embedded load does not re-exchange them
+(unless the shop's stored `scope` lacks a configured scope, in which case the
+scope re-exchange also yields an expiring pair). To move them onto expiring
+tokens (and gain background refresh), back-fill with
 `Shopifex.Auth.migrate_to_expiring_token/1`, or have the merchant reinstall.
 
 The exchange is **one-way and never retried** — Shopify destroys the

@@ -371,13 +371,13 @@ and `@session_token` without redirecting when no shop is in the session.
 
 With managed installation, **change your access scopes in `shopify.app.toml`**
 (`[access_scopes]`) and deploy your app config — Shopify grants the updated
-scopes when the merchant next installs/updates the app. Shopifex doesn't compare
-scopes or re-exchange because they changed; the stored `scope` is refreshed on
-the next token exchange (`:managed_install` re-exchanges on the token-expiry
-schedule, not on a scope change). `Shopifex.Plug.EnsureScopes` **raises** an
-actionable error by default when a shop is missing a required scope, so config
-drift surfaces immediately rather than silently bouncing the merchant through
-OAuth.
+scopes when the merchant next opens the app. Update `config :shopifex, :scopes`
+to match. On the next embedded load, `:managed_install` sees that the shop's
+stored `scope` lacks a configured scope and re-exchanges the `id_token`, which
+persists Shopify's current grant. If the grant is still short (the merchant has
+not approved the new scopes), `Shopifex.Plug.EnsureScopes` **raises** an
+actionable error by default, so config drift surfaces immediately rather than
+silently bouncing the merchant through OAuth.
 
 > **Legacy OAuth scope update (compatibility only).** If you opt into the OAuth
 > fallback (`plug Shopifex.Plug.EnsureScopes, on_missing_scopes: :redirect`), add
