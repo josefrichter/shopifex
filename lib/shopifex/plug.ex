@@ -188,6 +188,41 @@ defmodule Shopifex.Plug do
     end
   end
 
+  @redirect_salt "shopifex signed redirect"
+  @redirect_max_age_seconds 90
+
+  @doc """
+  Signs an app-issued redirect for `shop_url` that `Shopifex.Plug.ShopifySession`
+  will accept **only** at `path` (the request path, without query) and only for
+  #{@redirect_max_age_seconds} seconds. Used by `Shopifex.Plug.PaymentGuard` so a
+  request authenticated without an App Bridge `id_token` (legacy HMAC / non-embedded)
+  still reaches the plans page.
+
+  The token is bound to one destination on purpose: it is not a Shopify-style
+  query HMAC, so it cannot be replayed on other routes, and a guarded route will
+  not mint a fresh one from it.
+  """
+  @spec sign_redirect(String.t(), String.t()) :: String.t()
+  def sign_redirect(shop_url, path) when is_binary(shop_url) and is_binary(path) do
+    Plug.Crypto.sign(primary_secret(), @redirect_salt, %{shop_url: shop_url, path: path})
+  end
+
+  @doc """
+  Verifies a token from `sign_redirect/2` against `path`, trying the rotated
+  `:old_secret` when set. Returns `{:ok, shop_url}` or `:error`.
+  """
+  @spec verify_redirect(term(), String.t()) :: {:ok, String.t()} | :error
+  def verify_redirect(token, path) when is_binary(token) and is_binary(path) do
+    Enum.find_value(secrets(), :error, fn secret ->
+      case Plug.Crypto.verify(secret, @redirect_salt, token, max_age: @redirect_max_age_seconds) do
+        {:ok, %{shop_url: shop_url, path: ^path}} -> {:ok, shop_url}
+        _ -> nil
+      end
+    end)
+  end
+
+  def verify_redirect(_token, _path), do: :error
+
   @spec get_hmac(conn :: Plug.Conn.t()) :: String.t() | nil
   def get_hmac(%Plug.Conn{params: %{"hmac" => hmac}}) when is_binary(hmac),
     do: String.downcase(hmac)

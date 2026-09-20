@@ -340,10 +340,14 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   a merchant who had approved new scopes hit `EnsureScopes`'s raise until the
   token aged into the refresh window — never, for a legacy nil-expiry shop.
 - **`Shopifex.Plug.PaymentGuard`'s redirect stays authenticated without an
-  App Bridge token.** The redirect to `/payment/show-plans` now carries the
-  shop, a `timestamp`, and an app-signed `hmac` (in addition to forwarding an
-  `id_token` as `token` when one is present), so a legacy HMAC-authenticated or
-  non-embedded request reaches the plans page instead of the store selector.
+  App Bridge token.** The redirect to `/payment/show-plans` now carries a
+  short-lived `redirect_token` (`Shopifex.Plug.sign_redirect/2`, 90 s) bound
+  to the plans path, in addition to forwarding an `id_token` as `token` when
+  one is present. `Shopifex.Plug.ShopifySession` accepts the token only at the
+  path signed into it, so a captured link cannot authenticate any other route
+  or be used to mint a fresh credential. A legacy HMAC-authenticated or
+  non-embedded request therefore reaches the plans page instead of the store
+  selector.
 
 ### Changed
 

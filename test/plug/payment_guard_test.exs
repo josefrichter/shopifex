@@ -29,8 +29,8 @@ defmodule Shopifex.Plug.PaymentGuardTest do
     shop: shop
   } do
     # A legacy / non-embedded request authenticated by the signed query carries
-    # no id_token to forward, so the guard signs the redirect itself (hmac +
-    # timestamp + shop) and the show-plans route's :shopify_session accepts it.
+    # no id_token to forward, so the guard attaches a short-lived token bound to
+    # the plans path, which the show-plans route's :shopify_session accepts.
     conn =
       build_conn(:get, "/premium-route?foo=bar")
       |> Shopifex.Plug.build_session(shop, nil, "en")
@@ -41,10 +41,10 @@ defmodule Shopifex.Plug.PaymentGuardTest do
     [redirect_location] = Plug.Conn.get_resp_header(halted_conn, "location")
 
     query = redirect_location |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
-    assert query["shop"] == shop.url
-    assert query["hmac"]
-    assert query["timestamp"]
+    assert is_binary(query["redirect_token"])
     refute Map.has_key?(query, "token")
+    # Not a Shopify-style session HMAC: nothing here is accepted by other routes.
+    refute Map.has_key?(query, "hmac")
 
     followed = get(Phoenix.ConnTest.build_conn(), redirect_location)
 
@@ -52,26 +52,41 @@ defmodule Shopifex.Plug.PaymentGuardTest do
     assert Shopifex.Plug.current_shop(followed).url == shop.url
   end
 
-  test "a tampered signed redirect is rejected", %{shop: shop} do
-    conn =
+  test "a tampered redirect token is rejected", %{shop: shop} do
+    [redirect_location] =
       build_conn(:get, "/premium-route")
       |> Shopifex.Plug.build_session(shop, nil, "en")
-
-    [redirect_location] =
-      conn
       |> Shopifex.Plug.PaymentGuard.call("block")
       |> Plug.Conn.get_resp_header("location")
 
-    # Point the signed redirect at another shop without re-signing it.
-    tampered =
-      String.replace(redirect_location, URI.encode_www_form(shop.url), "other.myshopify.com")
+    %URI{path: path, query: query} = URI.parse(redirect_location)
+    params = URI.decode_query(query)
+    token = params["redirect_token"]
+    tampered = Map.put(params, "redirect_token", String.reverse(token))
 
-    assert tampered != redirect_location
-
-    followed = get(Phoenix.ConnTest.build_conn(), tampered)
+    followed = get(Phoenix.ConnTest.build_conn(), path <> "?" <> URI.encode_query(tampered))
 
     refute html_response(followed, 200) =~ "Payment options"
     assert Shopifex.Plug.current_shop(followed) == nil
+  end
+
+  test "the redirect token authenticates only the plans path, so a captured link cannot be replayed elsewhere",
+       %{shop: shop} do
+    [redirect_location] =
+      build_conn(:get, "/premium-route")
+      |> Shopifex.Plug.build_session(shop, nil, "en")
+      |> Shopifex.Plug.PaymentGuard.call("block")
+      |> Plug.Conn.get_resp_header("location")
+
+    %URI{query: query} = URI.parse(redirect_location)
+    token = URI.decode_query(query)["redirect_token"]
+
+    # Same token, a different :shopify_session route: no session is built, so no
+    # guard downstream can mint a fresh credential from it.
+    elsewhere =
+      get(Phoenix.ConnTest.build_conn(), "/?" <> URI.encode_query(%{"redirect_token" => token}))
+
+    assert Shopifex.Plug.current_shop(elsewhere) == nil
   end
 
   test "show-plans escapes a malicious redirect_after (no inline-script breakout)", %{conn: conn} do

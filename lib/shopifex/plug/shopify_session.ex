@@ -21,13 +21,27 @@ defmodule Shopifex.Plug.ShopifySession do
     if Shopifex.Plug.current_shop(conn) do
       conn
     else
-      case authenticate_session_token(conn) do
+      with :error <- authenticate_session_token(conn),
+           :error <- authenticate_signed_redirect(conn) do
+        initiate_new_session(conn)
+      else
         {:ok, shop} ->
           Shopifex.Plug.build_session(conn, shop, get_host(conn), get_locale(conn))
-
-        :error ->
-          initiate_new_session(conn)
       end
+    end
+  end
+
+  # An app-issued redirect (see `Shopifex.Plug.PaymentGuard`) carries a
+  # short-lived token bound to one destination path. It authenticates the shop
+  # only when the request path equals the path signed into the token, so a
+  # captured link cannot be replayed on another route.
+  defp authenticate_signed_redirect(conn) do
+    with token when is_binary(token) <- conn.query_params["redirect_token"],
+         {:ok, shop_url} <- Shopifex.Plug.verify_redirect(token, conn.request_path),
+         shop when not is_nil(shop) <- Shopifex.Shops.get_shop_by_url(shop_url) do
+      {:ok, shop}
+    else
+      _ -> :error
     end
   end
 

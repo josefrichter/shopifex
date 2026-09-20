@@ -45,21 +45,24 @@ defmodule Shopifex.Plug.PaymentGuard do
         redirect_after = URI.encode_www_form("#{conn.request_path}?#{conn.query_string}")
 
         prefix = Application.get_env(:shopifex, :path_prefix, "")
+        show_plans_path = "#{prefix}/payment/show-plans"
 
+        # A request authenticated without an App Bridge `id_token` (legacy HMAC
+        # / non-embedded) has nothing to forward, so the redirect carries a
+        # short-lived token bound to the plans path — accepted by ShopifySession
+        # there and nowhere else, so a captured link cannot be replayed on other
+        # routes or used to mint a fresh credential. An `id_token`, when present,
+        # is forwarded as `token` and tried first.
         params =
           %{
             "guard_identifier" => guard_identifier,
-            "redirect_after" => redirect_after,
-            "timestamp" => Integer.to_string(System.system_time(:second))
+            "redirect_after" => redirect_after
           }
-          |> maybe_put("shop", shop && Shopifex.Shops.get_url(shop))
           |> maybe_put("token", Shopifex.Plug.session_token(conn))
-          |> sign_redirect()
-
-        show_plans_url = "#{prefix}/payment/show-plans?#{URI.encode_query(params)}"
+          |> maybe_put("redirect_token", redirect_token(shop, show_plans_path))
 
         conn
-        |> Phoenix.Controller.redirect(to: show_plans_url)
+        |> Phoenix.Controller.redirect(to: "#{show_plans_path}?#{URI.encode_query(params)}")
         |> Plug.Conn.halt()
     end
   end
@@ -67,13 +70,8 @@ defmodule Shopifex.Plug.PaymentGuard do
   defp maybe_put(params, _key, nil), do: params
   defp maybe_put(params, key, value), do: Map.put(params, key, value)
 
-  # Sign the redirect the way Shopify signs an app load (`hmac` over the sorted
-  # query, plus a `timestamp`), so the show-plans route's `:shopify_session`
-  # pipeline accepts it even when the blocked request carried no App Bridge
-  # `id_token` — legacy HMAC-authenticated and non-embedded apps. When an
-  # `id_token` is present it is forwarded as `token` and used first.
-  defp sign_redirect(params) do
-    secret = Application.fetch_env!(:shopifex, :secret)
-    Map.put(params, "hmac", Shopifex.Plug.query_string_hmac(params, "&", secret))
-  end
+  defp redirect_token(nil, _path), do: nil
+
+  defp redirect_token(shop, path),
+    do: Shopifex.Plug.sign_redirect(Shopifex.Shops.get_url(shop), path)
 end
