@@ -24,7 +24,3 @@ shopifex-*.tar
 
 node_modules
 
-# Claude Code local working state (plans, scratchpad, solutions)
-.claude/
-# Riptide artifacts (cloud-synced)
-.humanlayer/tasks/

@@ -398,6 +398,6 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 - Move `show_plans` optional callback from `Shopifex.PaymentGuard` behaviour to `render_plans` in `ShopifexWeb.PaymentController` behavour
 
-[3.0.0]: https://github.com/josefrichter/shopifex/compare/v2.0.1...modern-shopifex
+[3.0.0]: https://github.com/ericdude4/shopifex/compare/v2.0.1...master
 [2.0.1]: https://github.com/ericdude4/shopifex/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/ericdude4/shopifex/compare/v1.1.1...v2.0.0

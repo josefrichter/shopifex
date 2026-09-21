@@ -12,7 +12,7 @@ start. This guide gives the concrete steps.
 ```elixir
 def deps do
   [
-    {:shopifex, github: "josefrichter/shopifex", branch: "modern-shopifex"}
+    {:shopifex, "~> 3.0"}
   ]
 end
 ```

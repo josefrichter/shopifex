@@ -1,6 +1,8 @@
-<img width="350" src="https://github.com/josefrichter/shopifex/raw/modern-shopifex/guides/images/logo.png" alt="Shopifex">
+<img width="350" src="https://github.com/ericdude4/shopifex/raw/master/guides/images/logo.png" alt="Shopifex">
 
 ---
+
+[![Hex.pm](https://img.shields.io/hexpm/v/shopifex.svg)](https://hex.pm/packages/shopifex)
 
 Shopifex is a Phoenix library for building Shopify **embedded apps**. Version
 3.0 targets Shopify's current (2026) embedded-app model: managed installation
@@ -8,31 +10,18 @@ via token exchange, expiring offline access tokens with background refresh,
 the GraphQL Admin API for webhooks and billing, App Bridge session-token
 authentication, and a Phoenix 1.8 baseline.
 
-## Status
-
-Shopifex 3.0 is developed on [`josefrichter/shopifex`](https://github.com/josefrichter/shopifex),
-branch `modern-shopifex`, pending an upstream release into
-[ericdude4/shopifex](https://github.com/ericdude4/shopifex). The fork's
-default branch (`master`) still tracks the pre-3.0 codebase, so pin the
-branch explicitly as shown below.
-
 ## Installation
 
 ```elixir
 def deps do
   [
-    {:shopifex, github: "josefrichter/shopifex", branch: "modern-shopifex"}
+    {:shopifex, "~> 3.0"}
   ]
 end
 ```
 
 ## Learning resources
 
-- **[Getting Started tutorial](https://josefrichter.github.io/shopifex/)** — a
-  beginner-friendly walkthrough (source:
-  [`docs/index.html`](https://github.com/josefrichter/shopifex/blob/modern-shopifex/docs/index.html))
-  that builds a live "Bestsellers" LiveView dashboard (auth, Admin GraphQL, webhooks +
-  PubSub, billing, App Bridge/Polaris).
 - **[Parity matrix](docs/parity-matrix.md)** — how Shopifex compares to Shopify's
   official JS and Ruby libraries.
 
@@ -41,17 +30,6 @@ end
 See [`docs/upgrading.md`](docs/upgrading.md) for the migration steps
 (dependency, database migrations, config keys, router, billing, LiveView) and
 a post-upgrade smoke-test checklist.
-
-## Claude Code plugin
-
-This repo doubles as a [Claude Code](https://docs.claude.com/en/docs/claude-code)
-plugin marketplace. The bundled `shopifex` skill (`skills/shopifex/`) teaches Claude
-the library's conventions so it scaffolds Shopifex features correctly.
-
-```
-/plugin marketplace add josefrichter/shopifex
-/plugin install shopifex@shopifex
-```
 
 ## Quickstart
 #### Run the install script
@@ -109,8 +87,9 @@ end
 The Shopify token request runs outside a database transaction; only a short
 compare-and-persist step locks the shop row after the response arrives.
 
-Add the `:shopifex` config settings to your `config.ex`. More config details in the
-[Getting Started tutorial](https://josefrichter.github.io/shopifex/).
+Add the `:shopifex` config settings to your `config.ex`. The config keys that
+3.0 adds or changes, with their defaults, are listed in
+[`docs/upgrading.md`](docs/upgrading.md#5-config-keys).
 
 ```elixir
 config :shopifex,

@@ -4,7 +4,7 @@ defmodule Shopifex.MixProject do
   def project do
     [
       app: :shopifex,
-      version: "3.0.0",
+      version: "2.4.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       compilers: Mix.compilers(),
@@ -14,19 +14,18 @@ defmodule Shopifex.MixProject do
       # Hex
       description: "Phoenix boilerplate for Shopify Embedded App SDK",
       package: [
-        maintainers: ["Josef Richter"],
+        maintainers: ["Eric Froese"],
         licenses: ["Apache-2.0"],
         links: %{
-          "GitHub" => "https://github.com/josefrichter/shopifex",
-          "Upstream (original)" => "https://github.com/ericdude4/shopifex"
+          "GitHub" => "https://github.com/ericdude4/shopifex"
         },
         files:
           ~w(lib LICENSE mix.exs README.md CHANGELOG.md docs/parity-matrix.md docs/upgrading.md)
       ],
       # Docs
       name: "Shopifex",
-      source_url: "https://github.com/josefrichter/shopifex",
-      homepage_url: "https://github.com/josefrichter/shopifex",
+      source_url: "https://github.com/ericdude4/shopifex",
+      homepage_url: "https://github.com/ericdude4/shopifex",
       docs: [
         # The main page in the docs
         main: "Shopifex",
