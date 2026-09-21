@@ -180,13 +180,39 @@ Review these against your `config/config.exs` / `runtime.exs`:
   subscriptions (and duplicate delivery).
 - `old_secret` — set during an app-secret rotation so HMAC/session-token/
   charge-binding verification accepts both the old and new secret.
-- `hmac_timestamp_tolerance_seconds` — defaults to `90`.
+- `hmac_timestamp_tolerance_seconds` — defaults to `90`. See "Reloads of a
+  signed admin URL" below.
 - `ensure_scopes_on_missing` — defaults to `:raise` in 3.0 (2.x behaviour was
   to redirect through legacy OAuth). Set to `:redirect` to keep the 2.x
   bounce, or pass `on_missing_scopes: :redirect` to the plug directly.
 - `redirect_uri` / `reinstall_uri` — only needed if you keep the legacy OAuth
   fallback routes (`/auth/install`, `/auth/update`); managed installation
   doesn't use them.
+
+### Reloads of a signed admin URL
+
+Shopify signs the URL of each app load from the admin with an `hmac` and a
+`timestamp`. `ShopifySession` rejects that signed query once the `timestamp`
+is older than `hmac_timestamp_tolerance_seconds`. 2.x checked only the `hmac`.
+
+The rejection also applies when the admin iframe requests the same URL again
+after the tolerance: a frame reload, `window.location.reload()`, or a LiveView
+full-page reload. When the `id_token` in that URL has expired as well,
+`ManagedInstall` passes the request on and `ShopifySession` renders
+`select_store.html`.
+
+To keep these reloads working, add a plug between `:managed_install` and
+`:shopify_session` for embedded GET requests. When the request carries an
+`id_token` that `Shopifex.SessionToken.verify/1` rejects, or a signed query
+that `Shopifex.Plug.timestamp_fresh?/2` rejects, the plug responds with a page
+that loads App Bridge, calls `shopify.idToken()`, and requests the same URL
+again with the new `id_token`. Mark that retry with a parameter holding the
+server time at which the page was rendered, and skip the page only while that
+time is recent. The marker stays in the iframe URL after the retry, so a
+marker without a time disables the page for every later reload of that URL.
+
+Raising `hmac_timestamp_tolerance_seconds` also keeps these reloads working.
+It extends the time in which a copied signed URL is accepted.
 
 ## 6. Router
 
@@ -347,3 +373,7 @@ path. See `Shopifex.Auth.migrate_to_expiring_token/1` for the full list of
   route (not just that Shopify redirects back with a 200).
 - **Uninstall webhook** — uninstall the dev store's app and confirm the shop
   record (and any dependent data) is cleaned up.
+- **Iframe reload** — open an app page from the admin, wait longer than
+  `hmac_timestamp_tolerance_seconds` and the one-minute `id_token` lifetime,
+  and reload only the app iframe. Confirm the page renders again and
+  `select_store.html` does not appear.

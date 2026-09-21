@@ -96,7 +96,10 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   via the shared `Shopifex.Plug.validate_timestamp/2` helper. The initial
   `/auth` session request (`Shopifex.Plug.ShopifySession`) now runs this same
   check, so a stale `timestamp` on an admin-load request is rejected too when
-  one is present (still not required there, unlike `:shopify_proxy`).
+  one is present (still not required there, unlike `:shopify_proxy`). An
+  iframe reload of a signed admin URL after the tolerance therefore renders the
+  store-selection page unless the app re-authenticates through App Bridge; see
+  `docs/upgrading.md` §5.
 - **`Shopifex.Plug.ShopifySession` reads `shop` from the HMAC-signed query
   params, not the request params.** A POST body `shop` can no longer override
   the signed value used to look up and build the session.
