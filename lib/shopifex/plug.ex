@@ -153,16 +153,32 @@ defmodule Shopifex.Plug do
   the app's current secret &mdash; or, when `config :shopifex, :old_secret` is
   set, the previous one. Trying both lets you rotate the app secret without
   dropping in-flight webhooks / signed requests still carrying the old signature.
-  Returns `false` for a non-binary `received` (e.g. a missing header).
+  Returns `false` for a non-binary `received` (e.g. a missing header), and
+  `false` without computing anything when a query value is not a string (a
+  bracket-syntax `foo[x]=y` parses to a map) — the only non-scalar Shopify
+  signs is the bulk-action `ids[]` list.
   """
   @spec hmac_matches?(conn :: Plug.Conn.t(), received :: term()) :: boolean()
   def hmac_matches?(%Plug.Conn{} = conn, received) when is_binary(received) do
-    Enum.any?(secrets(), fn secret ->
-      Plug.Crypto.secure_compare(build_hmac(conn, secret), received)
-    end)
+    conn = Plug.Conn.fetch_query_params(conn)
+
+    signable_query?(conn.query_params) and
+      Enum.any?(secrets(), fn secret ->
+        Plug.Crypto.secure_compare(build_hmac(conn, secret), received)
+      end)
   end
 
   def hmac_matches?(_conn, _received), do: false
+
+  # `query_string_hmac/3` interpolates every value and maps over `ids`, so a
+  # map value or a scalar `ids` would raise on unauthenticated input. Reject
+  # those shapes up front; a genuine Shopify signature never contains them.
+  defp signable_query?(query_params) when is_map(query_params) do
+    Enum.all?(query_params, fn
+      {"ids", ids} -> is_list(ids) and Enum.all?(ids, &is_binary/1)
+      {_key, value} -> is_binary(value)
+    end)
+  end
 
   @doc """
   Constant-time check that a Shopify **webhook** request is authentic: the
@@ -194,29 +210,54 @@ defmodule Shopifex.Plug do
   @doc """
   Signs an app-issued redirect for `shop_url` that `Shopifex.Plug.ShopifySession`
   will accept **only** at `path` (the request path, without query) and only for
-  #{@redirect_max_age_seconds} seconds. Used by `Shopifex.Plug.PaymentGuard` so a
-  request authenticated without an App Bridge `id_token` (legacy HMAC / non-embedded)
-  still reaches the plans page.
+  `:max_age` seconds. Used by `Shopifex.Plug.PaymentGuard` so a request
+  authenticated without an App Bridge `id_token` (legacy HMAC / non-embedded)
+  still reaches the plans page, and by `ShopifexWeb.PaymentHTML.select_plan_path/1`
+  so that page's Select request can authenticate its POST the same way.
 
   The token is bound to one destination on purpose: it is not a Shopify-style
   query HMAC, so it cannot be replayed on other routes, and a guarded route will
   not mint a fresh one from it.
+
+  ## Options
+
+    * `:max_age` - seconds the token stays valid. Embedded in the token as an
+      explicit `exp` claim (and as the `Plug.Crypto` signing max age), so the
+      lifetime is fixed at signing time and `verify_redirect/2` needs no
+      per-call override. Defaults to #{@redirect_max_age_seconds}.
   """
-  @spec sign_redirect(String.t(), String.t()) :: String.t()
-  def sign_redirect(shop_url, path) when is_binary(shop_url) and is_binary(path) do
-    Plug.Crypto.sign(primary_secret(), @redirect_salt, %{shop_url: shop_url, path: path})
+  @spec sign_redirect(String.t(), String.t(), keyword()) :: String.t()
+  def sign_redirect(shop_url, path, opts \\ [])
+      when is_binary(shop_url) and is_binary(path) and is_list(opts) do
+    max_age = Keyword.get(opts, :max_age, @redirect_max_age_seconds)
+    exp = System.system_time(:second) + max_age
+
+    Plug.Crypto.sign(
+      primary_secret(),
+      @redirect_salt,
+      %{shop_url: shop_url, path: path, exp: exp},
+      max_age: max_age
+    )
   end
 
   @doc """
-  Verifies a token from `sign_redirect/2` against `path`, trying the rotated
-  `:old_secret` when set. Returns `{:ok, shop_url}` or `:error`.
+  Verifies a token from `sign_redirect/3` against `path`, trying the rotated
+  `:old_secret` when set. The lifetime the signer embedded applies: the token
+  must be within its `Plug.Crypto` max age **and** its `exp` claim must still
+  be in the future. A token without an `exp` claim is rejected. Returns
+  `{:ok, shop_url}` or `:error`.
   """
   @spec verify_redirect(term(), String.t()) :: {:ok, String.t()} | :error
   def verify_redirect(token, path) when is_binary(token) and is_binary(path) do
+    now = System.system_time(:second)
+
     Enum.find_value(secrets(), :error, fn secret ->
-      case Plug.Crypto.verify(secret, @redirect_salt, token, max_age: @redirect_max_age_seconds) do
-        {:ok, %{shop_url: shop_url, path: ^path}} -> {:ok, shop_url}
-        _ -> nil
+      case Plug.Crypto.verify(secret, @redirect_salt, token) do
+        {:ok, %{shop_url: shop_url, path: ^path, exp: exp}} when is_integer(exp) and exp > now ->
+          {:ok, shop_url}
+
+        _ ->
+          nil
       end
     end)
   end
@@ -248,7 +289,9 @@ defmodule Shopifex.Plug do
     * `:timestamp_tolerance_seconds` - integer tolerance window in seconds. Defaults to
       `Application.get_env(:shopifex, :hmac_timestamp_tolerance_seconds, 90)`.
 
-  Returns `:ok` or `{:error, reason}` where `reason` is `"missing timestamp"` or `"stale timestamp"`.
+  Returns `:ok` or `{:error, reason}` where `reason` is `"missing timestamp"`,
+  `"malformed timestamp"` (not a string or integer, e.g. a bracket-syntax
+  `timestamp[x]=y` that parses to a map) or `"stale timestamp"`.
   """
   @spec validate_timestamp(conn :: Plug.Conn.t(), opts :: keyword()) :: :ok | {:error, String.t()}
   def validate_timestamp(conn, opts \\ []) do
@@ -266,7 +309,7 @@ defmodule Shopifex.Plug do
           :ok
         end
 
-      timestamp ->
+      timestamp when is_binary(timestamp) or is_integer(timestamp) ->
         with {seconds, _} <- Integer.parse(to_string(timestamp)),
              true <-
                abs(System.system_time(:second) - seconds) <= timestamp_tolerance_seconds(opts) do
@@ -274,6 +317,12 @@ defmodule Shopifex.Plug do
         else
           _ -> {:error, "stale timestamp"}
         end
+
+      # `to_string/1` raises on a map (`?timestamp[x]=y`); this check runs
+      # before any signature check on unauthenticated input, so it must reject
+      # rather than crash.
+      _ ->
+        {:error, "malformed timestamp"}
     end
   end
 

@@ -70,6 +70,18 @@ defmodule ShopifexWeb.AuthControllerTest do
       end
     end
 
+    test "a non-binary state param is dropped instead of raising", %{conn: conn} do
+      for query <- ["state[a]=b", "state[]=x"] do
+        conn = get(conn, "/initialize-installation?shop=shopifex-valid.myshopify.com&" <> query)
+
+        location = redirected_to(conn)
+        assert location =~ "https://shopifex-valid.myshopify.com/admin/oauth/authorize?"
+
+        params = location |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+        assert params["state"] == ""
+      end
+    end
+
     test "a valid shop still redirects to the Shopify OAuth authorize URL", %{conn: conn} do
       conn =
         get(conn, "/initialize-installation", %{

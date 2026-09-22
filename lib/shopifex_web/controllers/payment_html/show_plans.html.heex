@@ -19,7 +19,7 @@
 
 <script>
   (function () {
-    var route = <%= raw(Jason.encode!(path_prefix() <> "/payment/select-plan", escape: :html_safe)) %>;
+    var route = <%= raw(Jason.encode!(select_plan_path(@conn), escape: :html_safe)) %>;
     var redirectAfter = <%= raw(Jason.encode!(@redirect_after, escape: :html_safe)) %>;
 
     document.addEventListener("click", function (e) {
@@ -27,7 +27,9 @@
       if (!btn || btn.disabled) { return; }
       btn.disabled = true;
 
-      // App Bridge attaches the session token to this fetch automatically.
+      // Inside the Shopify admin, App Bridge authenticates this fetch with its
+      // Bearer id_token; outside it, the path-bound redirect_token on the
+      // route's URL does.
       fetch(route, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

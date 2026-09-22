@@ -40,17 +40,20 @@ defmodule Shopifex.ManagedInstall.Callbacks do
 
   | Hook                | First install | Token re-exchange (refresh) |
   |---------------------|:-------------:|:---------------------------:|
-  | `insert_shop/1`     | ✅            | — (uses `update_shop/2`)    |
+  | `insert_shop/1`     | ✅            | — (updates the row in place) |
   | `after_install/1`   | ✅            | —                           |
   | `after_exchange/2`  | ✅            | ✅                          |
 
   Use `after_exchange/2` for side effects that must run on refreshes too (it
   receives `new?`); use `after_install/1` for one-time install work.
 
-  > **Callbacks run synchronously inside the plug**, in the merchant's request.
-  > Anything slow (a profile fetch, snapshot, external sync) will block the page
-  > load — spawn your own supervised `Task` for it. The library does not wrap
-  > callbacks in a Task.
+  > **Callbacks run synchronously inside the plug**, in the merchant's request
+  > and while the per-shop `Shopifex.TokenRefreshLease` is still held. Anything
+  > slow (a profile fetch, snapshot, external sync) will block the page load —
+  > spawn your own supervised `Task` for it. The library does not wrap
+  > callbacks in a Task. Do not call `Shopifex.Auth.refresh/1` for the same
+  > shop from a hook: it would wait out the lease deadline and return
+  > `{:error, :refresh_in_progress}`.
   """
 
   @doc """

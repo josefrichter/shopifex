@@ -44,6 +44,8 @@ defmodule Shopifex.Plug.ManagedInstallTest do
   use Shopifex.DataCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
+
   alias Shopifex.Shops
   alias Shopifex.Plug.ManagedInstall
 
@@ -143,6 +145,82 @@ defmodule Shopifex.Plug.ManagedInstallTest do
     Shops.repo().update_all(from(s in Shops.shop_schema(), where: s.id == ^shop.id),
       set: [updated_at: old]
     )
+  end
+
+  # A stub whose token exchange parks until the test sends `:continue` to the
+  # requesting process, so a second load can be started while the first one is
+  # "waiting on Shopify". Every exchange reports `{:token_exchange, pid}`, which
+  # is how the race tests count HTTP calls. The stored scopes must satisfy
+  # `config :shopifex, :scopes` ("orders") or the waiter would classify the
+  # landed row as needing another exchange.
+  defp stub_blocking_exchange(response) do
+    parent = self()
+
+    Req.Test.stub(Shopifex.ReqStub, fn conn ->
+      if String.ends_with?(conn.request_path, "/admin/oauth/access_token") do
+        send(parent, {:token_exchange, self()})
+
+        receive do
+          :continue -> Req.Test.json(conn, response)
+        end
+      else
+        Req.Test.json(conn, %{"data" => %{"webhookSubscriptions" => %{"edges" => []}}})
+      end
+    end)
+  end
+
+  defp exchange_response(name) do
+    %{
+      "access_token" => "access_#{name}",
+      "scope" => "orders",
+      "expires_in" => 3600,
+      "refresh_token" => "refresh_#{name}",
+      "refresh_token_expires_in" => 7_776_000
+    }
+  end
+
+  # Runs the plug in its own process, the way two request handlers would. The
+  # task waits for `:run` so `Req.Test.allow/3` is in place before any HTTP
+  # call; the shared sandbox (`async: false`) covers its database access.
+  defp start_plug_task(params) do
+    task =
+      Task.async(fn ->
+        receive do
+          :run -> ManagedInstall.call(conn_with(params), [])
+        end
+      end)
+
+    :ok = Req.Test.allow(Shopifex.ReqStub, self(), task.pid)
+    send(task.pid, :run)
+    task
+  end
+
+  defp stale_shop!(overrides \\ %{}) do
+    Shops.create_shop(
+      Map.merge(
+        %{
+          url: @shop,
+          scope: "orders",
+          access_token: "stale_token",
+          token_expires_at:
+            DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second),
+          refresh_token: "stale_refresh"
+        },
+        overrides
+      )
+    )
+  end
+
+  defp put_wait_timeout!(ms) do
+    previous = Application.fetch_env(:shopifex, :token_refresh_wait_timeout_ms)
+    Application.put_env(:shopifex, :token_refresh_wait_timeout_ms, ms)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:shopifex, :token_refresh_wait_timeout_ms, value)
+        :error -> Application.delete_env(:shopifex, :token_refresh_wait_timeout_ms)
+      end
+    end)
   end
 
   # --- new shop --------------------------------------------------------------
@@ -373,10 +451,197 @@ defmodule Shopifex.Plug.ManagedInstallTest do
     assert Shopifex.Plug.current_shop(conn) == nil
   end
 
+  test "non-binary shop or id_token: no-op instead of raising" do
+    for params <- [
+          %{"id_token" => "not-a-jwt", "shop" => %{"a" => "b"}},
+          %{"id_token" => %{"a" => "b"}, "shop" => @shop},
+          %{"id_token" => ["x"], "shop" => @shop}
+        ] do
+      conn = ManagedInstall.call(conn_with(params), [])
+
+      refute_received :token_exchanged
+      assert Shopifex.Plug.current_shop(conn) == nil
+    end
+  end
+
   test "no id_token: passes the conn through untouched" do
     conn = ManagedInstall.call(conn_with(%{"shop" => @shop}), [])
 
     refute_received :token_exchanged
     assert Shopifex.Plug.current_shop(conn) == nil
+  end
+
+  # --- concurrent loads (token-exchange lease) -------------------------------
+
+  test "stale-token race: two concurrent loads exchange once and the waiter carries the persisted pair" do
+    stale_shop!()
+    stub_blocking_exchange(exchange_response("a"))
+    params = %{"id_token" => token(), "shop" => @shop, "host" => "h"}
+
+    # A reads the stale row, takes the lease and is now waiting on Shopify.
+    a = start_plug_task(params)
+    assert_receive {:token_exchange, a_request_pid}, 1_000
+
+    # B reads the same stale row while A is in flight. It must wait on the
+    # lease rather than issue its own exchange.
+    b = start_plug_task(params)
+    refute_receive {:token_exchange, _pid}, 300
+
+    send(a_request_pid, :continue)
+    a_conn = Task.await(a)
+    b_conn = Task.await(b)
+
+    # Exactly one exchange happened, and B built its session from A's pair.
+    refute_received {:token_exchange, _pid}
+    assert Shopifex.Plug.current_shop(a_conn).refresh_token == "refresh_a"
+    assert Shopifex.Plug.current_shop(b_conn).access_token == "access_a"
+    assert Shopifex.Plug.current_shop(b_conn).refresh_token == "refresh_a"
+
+    stored = Shops.get_shop_by_url(@shop)
+    assert stored.access_token == "access_a"
+    assert stored.refresh_token == "refresh_a"
+
+    assert_received {:after_exchange, false}
+    refute_received {:after_exchange, _}
+    refute_received {:after_install, _}
+    assert Repo.aggregate("shopifex_token_refresh_leases", :count) == 0
+  end
+
+  test "first-install race: two concurrent first loads insert one row and run the install hooks once" do
+    stub_blocking_exchange(exchange_response("install"))
+    params = %{"id_token" => token(), "shop" => @shop, "host" => "h"}
+
+    a = start_plug_task(params)
+    assert_receive {:token_exchange, a_request_pid}, 1_000
+
+    b = start_plug_task(params)
+    refute_receive {:token_exchange, _pid}, 300
+
+    send(a_request_pid, :continue)
+    a_conn = Task.await(a)
+    b_conn = Task.await(b)
+
+    refute_received {:token_exchange, _pid}
+
+    assert Repo.aggregate(from(s in Shops.shop_schema(), where: s.url == ^@shop), :count) == 1
+    stored = Shops.get_shop_by_url(@shop)
+    assert stored.access_token == "access_install"
+
+    # The waiter's session is the row the lease holder inserted.
+    assert Shopifex.Plug.current_shop(a_conn).id == stored.id
+    assert Shopifex.Plug.current_shop(b_conn).id == stored.id
+    assert Shopifex.Plug.current_shop(b_conn).refresh_token == "refresh_install"
+
+    assert_received {:after_install, _shop}
+    refute_received {:after_install, _}
+    assert_received {:after_exchange, true}
+    refute_received {:after_exchange, _}
+  end
+
+  test "superseded persist: a pair written while the exchange was in flight is kept, no hook runs" do
+    shop = stale_shop!()
+    parent = self()
+
+    later =
+      DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:second)
+
+    # Between this exchange's request and its response, "someone else" (a
+    # refresh that won the row without the lease, e.g. after the lease TTL)
+    # rotates the tokens. The exchange's own pair must not overwrite it.
+    Req.Test.stub(Shopifex.ReqStub, fn conn ->
+      if String.ends_with?(conn.request_path, "/admin/oauth/access_token") do
+        send(parent, :token_exchanged)
+
+        Shops.update_shop(shop, %{
+          access_token: "refreshed_access",
+          token_expires_at: later,
+          refresh_token: "refreshed_refresh",
+          refresh_token_expires_at: DateTime.add(later, 86_400, :second)
+        })
+
+        Req.Test.json(conn, exchange_response("exchange"))
+      else
+        send(parent, :webhook_reconciled)
+        Req.Test.json(conn, %{"data" => %{"webhookSubscriptions" => %{"edges" => []}}})
+      end
+    end)
+
+    conn =
+      ManagedInstall.call(conn_with(%{"id_token" => token(), "shop" => @shop, "host" => "h"}), [])
+
+    assert_received :token_exchanged
+
+    stored = Shops.get_shop_by_url(@shop)
+    assert stored.access_token == "refreshed_access"
+    assert stored.refresh_token == "refreshed_refresh"
+
+    # The session carries the row's pair, not the discarded exchange response...
+    assert Shopifex.Plug.current_shop(conn).access_token == "refreshed_access"
+    assert Shopifex.Plug.current_shop(conn).refresh_token == "refreshed_refresh"
+    # ...and the every-exchange side effects belong to the writer that won.
+    refute_received {:after_exchange, _}
+    refute_received :webhook_reconciled
+    assert Repo.aggregate("shopifex_token_refresh_leases", :count) == 0
+  end
+
+  test "deadline fallback: a lease held past the wait deadline logs a warning and the exchange still completes" do
+    put_wait_timeout!(0)
+    stale_shop!()
+
+    Repo.insert_all("shopifex_token_refresh_leases", [
+      %{
+        shop_url: @shop,
+        owner: "another-node",
+        lease_expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
+      }
+    ])
+
+    stub_shopify()
+
+    log =
+      capture_log(fn ->
+        conn =
+          ManagedInstall.call(
+            conn_with(%{"id_token" => token(), "shop" => @shop, "host" => "h"}),
+            []
+          )
+
+        assert Shopifex.Plug.current_shop(conn).access_token == "offline_access_token"
+      end)
+
+    assert log =~ "still held past the wait deadline"
+    assert_received :token_exchanged
+    assert_received {:after_exchange, false}
+    assert Shops.get_shop_by_url(@shop).refresh_token == "offline_refresh_token"
+
+    # The foreign lease is left alone; only the owner may release it.
+    assert Repo.aggregate("shopifex_token_refresh_leases", :count) == 1
+  end
+
+  test "a failed exchange releases the lease and falls back to the stored shop" do
+    stale_shop!()
+    parent = self()
+
+    Req.Test.stub(Shopifex.ReqStub, fn conn ->
+      send(parent, :token_exchanged)
+      conn |> Plug.Conn.put_status(500) |> Req.Test.json(%{"error" => "upstream"})
+    end)
+
+    _log =
+      capture_log(fn ->
+        conn =
+          ManagedInstall.call(
+            conn_with(%{"id_token" => token(), "shop" => @shop, "host" => "h"}),
+            []
+          )
+
+        send(parent, {:conn, conn})
+      end)
+
+    assert_received {:conn, conn}
+    assert_received :token_exchanged
+    assert Shopifex.Plug.current_shop(conn).access_token == "stale_token"
+    refute_received {:after_exchange, _}
+    assert Repo.aggregate("shopifex_token_refresh_leases", :count) == 0
   end
 end

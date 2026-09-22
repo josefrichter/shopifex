@@ -23,6 +23,27 @@ defmodule Shopifex.Plug.ManagedInstall do
   `after_exchange/2`), so apps can customise shop creation and side effects
   without re-implementing token exchange.
 
+  ## Concurrency
+
+  Concurrent embedded loads of the same shop (two tabs, a reload during a slow
+  exchange, several app-load requests fanned out by the admin) are serialized
+  per shop through `Shopifex.TokenRefreshLease` — the same lease
+  `Shopifex.Auth.refresh/1` takes — so exactly one of them exchanges the
+  `id_token`. The others poll the shop row and build their session from the
+  pair the exchange persisted, without contacting Shopify; a first install
+  inserts the row once. The `shopifex_token_refresh_leases` table is therefore
+  required by this plug, not only by background refresh (see
+  `docs/upgrading.md`). A load that cannot obtain or observe the lease within
+  `config :shopifex, :token_refresh_wait_timeout_ms` (15s by default) logs a
+  warning and exchanges without it. A re-exchange of an existing shop is
+  written with the same locked compare `Shopifex.Auth.refresh/1` uses, so a
+  pair that a refresh or another exchange persisted meanwhile is kept rather
+  than overwritten. The lease is held until the exchange, its persistence, the
+  webhook reconcile and the `Shopifex.ManagedInstall.Callbacks` hooks have
+  run, so a hook that calls `Shopifex.Auth.refresh/1` for the same shop
+  synchronously waits out the lease deadline and gets
+  `{:error, :refresh_in_progress}`; run such work asynchronously.
+
   Webhooks are reconciled via `Shopifex.Shops.configure_webhooks/1` on first
   install **and on every re-exchange** (idempotent self-heal — see that function).
   Reconciliation issues one `webhookSubscriptions` query (plus a create per missing
@@ -65,6 +86,8 @@ defmodule Shopifex.Plug.ManagedInstall do
 
   require Logger
 
+  alias Shopifex.TokenRefreshLease
+
   # Re-exchange the offline access token on the next id_token-bearing embedded
   # load once it is within this window of expiry (or already expired). Shopify's
   # expiring offline tokens have a ~1-hour TTL; a 10-minute buffer keeps the token
@@ -74,7 +97,10 @@ defmodule Shopifex.Plug.ManagedInstall do
 
   def init(opts), do: opts
 
-  def call(%{params: %{"id_token" => id_token, "shop" => shop_url}} = conn, _opts) do
+  # Non-binary params (`?shop[a]=b`) fall through to the no-op clause: nothing
+  # below could verify them, and interpolating a map into the log would raise.
+  def call(%{params: %{"id_token" => id_token, "shop" => shop_url}} = conn, _opts)
+      when is_binary(id_token) and is_binary(shop_url) do
     case Shopifex.SessionToken.verify(id_token, shop_url) do
       {:ok, _claims} ->
         load_or_exchange_shop(conn, id_token, shop_url)
@@ -103,29 +129,125 @@ defmodule Shopifex.Plug.ManagedInstall do
   def call(conn, _opts), do: conn
 
   defp load_or_exchange_shop(conn, id_token, shop_url) do
+    case classify_shop(shop_url) do
+      {:fresh, shop} ->
+        build_session_from_shop(conn, shop)
+
+      {:exchange, _reason, _shop} ->
+        deadline = System.monotonic_time(:millisecond) + TokenRefreshLease.wait_timeout_ms()
+        exchange_with_lease(conn, id_token, shop_url, deadline)
+    end
+  end
+
+  # Reads the row and decides whether this load needs a token exchange. Cheap
+  # enough to run again under the lease and on every poll while waiting, so a
+  # process that lost the race to another exchange (or a background refresh)
+  # observes the landed pair instead of issuing its own.
+  defp classify_shop(shop_url) do
     case Shopifex.Shops.get_shop_by_url(shop_url) do
       nil ->
-        Logger.info("[Shopifex.ManagedInstall] Shop #{shop_url} not found, exchanging id_token")
-
-        exchange_token_and_upsert_shop(conn, id_token, shop_url, _new? = true, _fallback = nil)
+        {:exchange, :not_found, nil}
 
       shop ->
         cond do
-          token_stale?(shop) ->
-            Logger.info("[Shopifex.ManagedInstall] Refreshing access_token for #{shop_url}")
-            exchange_token_and_upsert_shop(conn, id_token, shop_url, _new? = false, shop)
-
-          scopes_missing?(shop) ->
-            Logger.info(
-              "[Shopifex.ManagedInstall] Stored scopes for #{shop_url} lack configured scopes, re-exchanging"
-            )
-
-            exchange_token_and_upsert_shop(conn, id_token, shop_url, _new? = false, shop)
-
-          true ->
-            build_session_from_shop(conn, shop)
+          token_stale?(shop) -> {:exchange, :stale_token, shop}
+          scopes_missing?(shop) -> {:exchange, :scopes_missing, shop}
+          true -> {:fresh, shop}
         end
     end
+  end
+
+  # Exchanges are serialized per shop through the same lease `Shopifex.Auth`
+  # takes for refresh-token grants: two embedded loads of a stale shop would
+  # otherwise both exchange, and the pair that arrived last would be persisted
+  # even if it was issued first (Shopify retires the older pair's refresh
+  # token), while two first loads would both insert the shop. The lease is a
+  # row in `shopifex_token_refresh_leases`; the Shopify request runs without
+  # any lock on the shop row.
+  defp exchange_with_lease(conn, id_token, shop_url, deadline) do
+    case TokenRefreshLease.acquire(shop_url) do
+      {:ok, owner} ->
+        try do
+          exchange_as_owner(conn, id_token, shop_url)
+        after
+          TokenRefreshLease.release(shop_url, owner)
+        end
+
+      :busy ->
+        wait_for_exchange(conn, id_token, shop_url, deadline)
+    end
+  end
+
+  defp exchange_as_owner(conn, id_token, shop_url) do
+    case classify_shop(shop_url) do
+      {:fresh, shop} ->
+        Logger.info(
+          "[Shopifex.ManagedInstall] Token for #{shop_url} was refreshed concurrently, skipping exchange"
+        )
+
+        build_session_from_shop(conn, shop)
+
+      {:exchange, reason, shop} ->
+        log_exchange_reason(reason, shop_url)
+        exchange_token_and_upsert_shop(conn, id_token, shop_url, is_nil(shop), shop)
+    end
+  end
+
+  # Another process holds the lease. Poll the row until it lands a usable
+  # pair (then no HTTP call is made here at all) or the lease frees up. Past
+  # the deadline the exchange runs uncoordinated, as it did before the lease
+  # existed; the compare-and-persist in `persist_shop/3` still keeps a newer
+  # pair from being overwritten.
+  defp wait_for_exchange(conn, id_token, shop_url, deadline) do
+    remaining_ms = deadline - System.monotonic_time(:millisecond)
+
+    if remaining_ms <= 0 do
+      Logger.warning(
+        "[Shopifex.ManagedInstall] Token exchange lease for #{shop_url} still held past the wait deadline, exchanging without it"
+      )
+
+      case classify_shop(shop_url) do
+        {:fresh, shop} ->
+          build_session_from_shop(conn, shop)
+
+        {:exchange, reason, shop} ->
+          log_exchange_reason(reason, shop_url)
+          exchange_token_and_upsert_shop(conn, id_token, shop_url, is_nil(shop), shop)
+      end
+    else
+      poll_ms = min(TokenRefreshLease.poll_interval_ms(), remaining_ms)
+
+      receive do
+      after
+        poll_ms -> :ok
+      end
+
+      case classify_shop(shop_url) do
+        {:fresh, shop} ->
+          Logger.info(
+            "[Shopifex.ManagedInstall] Token for #{shop_url} was exchanged concurrently, skipping exchange"
+          )
+
+          build_session_from_shop(conn, shop)
+
+        {:exchange, _reason, _shop} ->
+          exchange_with_lease(conn, id_token, shop_url, deadline)
+      end
+    end
+  end
+
+  defp log_exchange_reason(:not_found, shop_url) do
+    Logger.info("[Shopifex.ManagedInstall] Shop #{shop_url} not found, exchanging id_token")
+  end
+
+  defp log_exchange_reason(:stale_token, shop_url) do
+    Logger.info("[Shopifex.ManagedInstall] Refreshing access_token for #{shop_url}")
+  end
+
+  defp log_exchange_reason(:scopes_missing, shop_url) do
+    Logger.info(
+      "[Shopifex.ManagedInstall] Stored scopes for #{shop_url} lack configured scopes, re-exchanging"
+    )
   end
 
   # A merchant who approved newly configured scopes (a managed-install scope
@@ -135,16 +257,11 @@ defmodule Shopifex.Plug.ManagedInstall do
   # returns Shopify's current grant, which `TokenResponse` persists. If the
   # grant is still short, `EnsureScopes` raises as before.
   defp scopes_missing?(shop) do
-    required = split_scopes(Application.get_env(:shopifex, :scopes, ""))
-    granted = split_scopes(Shopifex.Shops.get_scope(shop))
+    required = Application.get_env(:shopifex, :scopes)
+    granted = Shopifex.Shops.get_scope(shop)
 
-    required -- granted != []
+    Shopifex.Scopes.missing(required, granted) != []
   end
-
-  defp split_scopes(nil), do: []
-
-  defp split_scopes(scopes) when is_binary(scopes),
-    do: scopes |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
 
   # Staleness is measured against `token_expires_at` — the token's actual lifetime
   # — NOT the row's `updated_at`, which any unrelated shop update would reset (an
@@ -196,10 +313,19 @@ defmodule Shopifex.Plug.ManagedInstall do
       {:ok, %{status: 200, body: response_body}} when is_map(response_body) ->
         Logger.info("[Shopifex.ManagedInstall] Token exchange successful for #{shop_url}")
 
-        shop =
-          persist_shop(new?, fallback, Shopifex.TokenResponse.shop_attrs(shop_url, response_body))
+        attrs = Shopifex.TokenResponse.shop_attrs(shop_url, response_body)
 
-        build_session_from_shop(conn, shop)
+        case persist_shop(new?, fallback, attrs) do
+          {:ok, shop} ->
+            build_session_from_shop(conn, shop)
+
+          {:error, :shop_not_found} ->
+            Logger.error(
+              "[Shopifex.ManagedInstall] Shop #{shop_url} was deleted during token exchange"
+            )
+
+            fallback_session(conn, nil)
+        end
 
       {:ok, %{status: status, body: body}} ->
         Logger.error(
@@ -219,14 +345,17 @@ defmodule Shopifex.Plug.ManagedInstall do
 
   # First install: persist through the configurable managed-install callbacks so
   # apps can customise creation, then configure webhooks (first install only) and
-  # run the first-install + every-exchange side-effect hooks.
+  # run the first-install + every-exchange side-effect hooks. Only the lease
+  # holder gets here for an absent row; a concurrent first load finds the
+  # inserted row while polling, so no `on_conflict` upsert (which would need a
+  # unique index custom schemas may lack) is required.
   defp persist_shop(_new? = true, _fallback, attrs) do
     callbacks = Shopifex.ManagedInstall.Callbacks.module()
     shop = callbacks.insert_shop(attrs)
     Shopifex.Shops.configure_webhooks(shop)
     callbacks.after_install(shop)
     callbacks.after_exchange(shop, true)
-    shop
+    {:ok, shop}
   end
 
   # Token refresh of an already-installed shop: update the token-lifecycle
@@ -234,6 +363,13 @@ defmodule Shopifex.Plug.ManagedInstall do
   # install registration or topics added to `:webhook_topics` later; runs at the
   # ≤50-minute re-exchange cadence, never on the hot per-load path), and run the
   # every-exchange hook (NOT the first-install hooks).
+  #
+  # The write is the same compare-and-persist `Shopifex.Auth.refresh/1` uses:
+  # the row is locked and compared against `shop` as read before the HTTP
+  # call. If a refresh or an uncoordinated exchange rotated the tokens in the
+  # meantime, that pair is kept, the session is built from it, and the
+  # webhook reconcile / `after_exchange` hook are skipped (the other writer ran
+  # them for its exchange).
   #
   # `config :shopifex, :configure_webhooks_on_exchange?` (default `true`) gates
   # only this recurring reconcile — first install always registers. Set it to
@@ -243,14 +379,38 @@ defmodule Shopifex.Plug.ManagedInstall do
   # `[]` instead.
   defp persist_shop(_new? = false, shop, attrs) do
     callbacks = Shopifex.ManagedInstall.Callbacks.module()
-    shop = Shopifex.Shops.update_shop(shop, attrs)
 
-    if Application.get_env(:shopifex, :configure_webhooks_on_exchange?, true) do
-      Shopifex.Shops.configure_webhooks(shop)
+    case Shopifex.Auth.persist_token_pair(shop, attrs) do
+      {:ok, persisted} ->
+        shop = reload_for_session(persisted)
+
+        if Application.get_env(:shopifex, :configure_webhooks_on_exchange?, true) do
+          Shopifex.Shops.configure_webhooks(shop)
+        end
+
+        callbacks.after_exchange(shop, false)
+        {:ok, shop}
+
+      {:ok, :superseded, current} ->
+        Logger.info(
+          "[Shopifex.ManagedInstall] Token exchange for #{Shopifex.Shops.get_url(current)} superseded by a concurrent token write, keeping the stored pair"
+        )
+
+        {:ok, reload_for_session(current)}
+
+      {:error, :shop_not_found} ->
+        {:error, :shop_not_found}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        raise Ecto.InvalidChangesetError, action: :update, changeset: changeset
     end
+  end
 
-    callbacks.after_exchange(shop, false)
-    shop
+  # The locked row comes straight from the schema, without the filters and
+  # preloads `Shopifex.Shops.get_shop_by_url/1` applies; re-read it so the
+  # session carries the same shape as a load that needed no exchange.
+  defp reload_for_session(shop) do
+    Shopifex.Shops.get_shop_by_url(Shopifex.Shops.get_url(shop)) || shop
   end
 
   defp build_session_from_shop(conn, shop) do

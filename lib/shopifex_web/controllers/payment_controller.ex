@@ -389,12 +389,17 @@ defmodule ShopifexWeb.PaymentController do
         {:error, {:unknown_plan_type, Map.get(plan, :type)}}
       end
 
+      # Only string params reach the binding lookup below: the return URL Shopify
+      # redirects to (`charge_return_url/2`) always carries strings, and a
+      # bracket-syntax `plan_id[x]=y` (a map) would otherwise raise *after* the
+      # binding was popped, bypassing the restore in `complete_bound_payment/5`.
       def complete_payment(conn, %{
             "charge_id" => raw_charge_id,
             "plan_id" => raw_plan_id,
             "shop" => shop_url
-          }) do
-        case Integer.parse(to_string(raw_charge_id)) do
+          })
+          when is_binary(raw_charge_id) and is_binary(raw_plan_id) and is_binary(shop_url) do
+        case Integer.parse(raw_charge_id) do
           {charge_id, ""} ->
             complete_bound_payment(conn, charge_id, raw_charge_id, raw_plan_id, shop_url)
 
@@ -430,7 +435,19 @@ defmodule ShopifexWeb.PaymentController do
             payment_forbidden(conn)
 
           binding_blob ->
-            case verify_binding_and_grant(conn, binding_blob, charge_id, raw_plan_id, shop_url) do
+            # A raise past this point (a plan deleted while the charge was
+            # pending, a custom `get_plan/1` returning nil, a store outage)
+            # must not consume the binding either: put it back, then re-raise.
+            result =
+              try do
+                verify_binding_and_grant(conn, binding_blob, charge_id, raw_plan_id, shop_url)
+              rescue
+                exception ->
+                  store.set(charge_id, binding_blob)
+                  reraise exception, __STACKTRACE__
+              end
+
+            case result do
               {:ok, conn} ->
                 conn
 

@@ -4,6 +4,10 @@ defmodule Shopifex.Plug.EnsureScopes do
   defined under `config :shopifex, scopes: "foo"` (or the `:required_scopes`
   plug option).
 
+  Both the required and the granted scope lists are normalised with
+  `Shopifex.Scopes.split/1`: whitespace around scope names is ignored and empty
+  segments are dropped, so an empty (or `nil`) `:scopes` config requires nothing.
+
   ## Behaviour on a scope mismatch
 
   For managed-install apps (the 3.0 default) access scopes are declared in your
@@ -49,17 +53,12 @@ defmodule Shopifex.Plug.EnsureScopes do
       shop ->
         required_scopes =
           if Keyword.has_key?(opts, :required_scopes) do
-            Keyword.get(opts, :required_scopes, "")
+            Keyword.get(opts, :required_scopes)
           else
-            Application.get_env(:shopifex, :scopes, "")
+            Application.get_env(:shopifex, :scopes)
           end
-          |> String.split(",")
 
-        shop_scopes =
-          (Shopifex.Shops.get_scope(shop) || "")
-          |> String.split(",")
-
-        case required_scopes -- shop_scopes do
+        case Shopifex.Scopes.missing(required_scopes, Shopifex.Shops.get_scope(shop)) do
           [] -> conn
           missing_scopes -> handle_missing_scopes(conn, shop, missing_scopes, opts)
         end
@@ -100,10 +99,7 @@ defmodule Shopifex.Plug.EnsureScopes do
       "Shop #{Shopifex.Shops.get_url(shop)} is missing required scopes #{inspect(missing_scopes)}, initiating legacy OAuth update"
     )
 
-    base_required_scopes =
-      :shopifex
-      |> Application.get_env(:scopes, "")
-      |> String.split(",")
+    base_required_scopes = Shopifex.Scopes.split(Application.get_env(:shopifex, :scopes))
 
     all_scopes_to_request = Enum.join(missing_scopes ++ base_required_scopes, ",")
 

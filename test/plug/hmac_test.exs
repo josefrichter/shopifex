@@ -128,6 +128,62 @@ defmodule Shopifex.Plug.HmacTest do
       assert conn.status == 401
     end
 
+    test "rejects a map-valued timestamp with 401 instead of raising" do
+      # `?timestamp[x]=y` parses to a map; the timestamp check runs before the
+      # signature check on unauthenticated input, so it must not crash.
+      for params <- [
+            %{"shop" => "x.myshopify.com", "timestamp" => %{"x" => "y"}},
+            %{
+              "shop" => "x.myshopify.com",
+              "timestamp" => %{"x" => "y"},
+              "signature" => "deadbeef"
+            },
+            %{"shop" => "x.myshopify.com", "timestamp" => %{"x" => "y"}, "hmac" => "deadbeef"}
+          ] do
+        conn = ValidateHmac.call(get_conn(params), ValidateHmac.init(require_timestamp: true))
+        assert conn.halted
+        assert conn.status == 401
+      end
+    end
+
+    test "rejects a map-valued param with 401 when a signature is present" do
+      # `query_string_hmac/3` interpolates every value; a map would raise inside
+      # the signature computation, one param over from the timestamp guard.
+      fresh = to_string(System.system_time(:second))
+
+      for params <- [
+            %{
+              "shop" => "x.myshopify.com",
+              "timestamp" => fresh,
+              "foo" => %{"x" => "y"},
+              "signature" => "deadbeef"
+            },
+            %{
+              "shop" => "x.myshopify.com",
+              "timestamp" => fresh,
+              "foo" => %{"x" => "y"},
+              "hmac" => "deadbeef"
+            },
+            %{
+              "shop" => "x.myshopify.com",
+              "timestamp" => fresh,
+              "ids" => "not-a-list",
+              "hmac" => "deadbeef"
+            }
+          ] do
+        conn = ValidateHmac.call(get_conn(params), [])
+        assert conn.halted
+        assert conn.status == 401
+      end
+    end
+
+    test "still accepts the bulk-action ids list" do
+      base = %{"shop" => "x.myshopify.com", "ids" => ["1", "2"]}
+      hmac = Shopifex.Test.sign_query_hmac(base)
+
+      refute ValidateHmac.call(get_conn(Map.put(base, "hmac", hmac)), []).halted
+    end
+
     test "rejects when query timestamp is stale even if body timestamp is fresh (body param shadowing)" do
       stale = System.system_time(:second) - 1000
       fresh = System.system_time(:second)

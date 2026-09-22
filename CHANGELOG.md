@@ -85,6 +85,34 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Security
 
+- **`complete_payment/2` validates its params before consuming the charge
+  binding, and restores the binding on any exception.** The signed binding was
+  popped from the store before `plan_id` was compared with `to_string/1`, so an
+  unauthenticated `?plan_id[x]=y` (a map) with a pending charge id and the
+  public shop domain raised after the pop, skipped the restore-on-error
+  branch, and left the merchant's own confirmation with no binding and no
+  grant. `charge_id`, `plan_id` and `shop` must now be strings before the
+  store is touched (Shopify's return URL always sends strings), and an
+  exception raised after the pop (for example a plan deleted while the charge
+  was pending) puts the binding back before re-raising.
+- **Non-string query params are rejected before HMAC and timestamp checks.**
+  A bracket-syntax param (`?timestamp[x]=y`, `?foo[x]=y`) parses to a map.
+  `Shopifex.Plug.validate_timestamp/2` called `to_string/1` on it and the
+  query-HMAC computation interpolated every value before any signature check,
+  so unauthenticated input answered `500` instead of `401` on the
+  `:shopify_proxy`, `:validate_install_hmac`, `:shopify_admin_link` and
+  `:shopify_session` pipelines. `validate_timestamp/2` now returns
+  `{:error, "malformed timestamp"}` for a non-string, non-integer value, and
+  `Shopifex.Plug.hmac_matches?/2` returns `false` without computing anything
+  unless every query value is a string (`ids`: a list of strings).
+  `Shopifex.Plug.ManagedInstall` ignores non-string `id_token` / `shop`
+  params, and `initialize_installation/2` forwards only a string `state`.
+- **`Shopifex.SessionToken` validates the `dest` host with the anchored
+  `Shopifex.ShopDomain.valid?/1` pattern** that `initialize_installation`
+  already applies to the unsigned `shop` param, instead of a `.myshopify.com`
+  suffix check. `dest` is inside the signed token, so this is defence in depth
+  for the host that is interpolated into the token-exchange URL and stored as
+  the shop's `url`.
 - HMAC comparisons use constant-time `Plug.Crypto.secure_compare/2` everywhere
   (`ValidateHmac`, `ShopifyWebhook`, `ShopifySession`), and computed HMAC values
   are no longer logged on failure.
@@ -153,6 +181,10 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Added
 
+- `Shopifex.Scopes` — `split/1` (comma-separated string, list, or `nil` → a
+  trimmed list with empty segments dropped) and `missing/2` (required scopes
+  the grant lacks, in required order), the shared scope-list parser behind
+  `Shopifex.Plug.EnsureScopes` and `Shopifex.Plug.ManagedInstall`.
 - `Shopifex.Auth` — background offline-token refresh: proactive refresh
   within a 5-minute safety window (`fresh_token/1`), reactive refresh on a
   401, and cross-node concurrency safety via a dedicated
@@ -270,6 +302,58 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Fixed
 
+- **`Shopifex.Plug.EnsureScopes` normalises scope lists before comparing
+  them.** `config :shopifex, :scopes` and the shop's stored `scope` were split
+  with a bare `String.split/2`, so an empty `:scopes` config raised on every
+  request under the new `:raise` default (the "missing" scope was `""`), a
+  `nil` config crashed with a `FunctionClauseError`, and
+  `"read_products, write_products"` (space after the comma) never matched
+  Shopify's `"read_products,write_products"`; the legacy `:redirect` also sent
+  `scope=,` for an empty config. `EnsureScopes` and
+  `Shopifex.Plug.ManagedInstall` (which already trimmed) now both parse
+  through `Shopifex.Scopes.split/1`: whitespace around scope names is ignored,
+  empty segments are dropped, and an empty or `nil` `:scopes` config requires
+  nothing. Missing scopes are reported trimmed, and the `:required_scopes`
+  plug option also accepts a list of scope names.
+- **Managed install: concurrent embedded loads no longer race the token
+  exchange.** `Shopifex.Plug.ManagedInstall` now takes the per-shop
+  `Shopifex.TokenRefreshLease` (the lease `Shopifex.Auth.refresh/1` already
+  uses) around every `id_token` exchange. Two concurrent loads of a shop with
+  a stale token previously both exchanged and the last response to arrive was
+  persisted unconditionally, even when it had been issued first, leaving a
+  refresh token Shopify had already retired (background refresh then failed
+  until the next embedded load); two concurrent first loads both inserted the
+  shop (raising on the unique `url` index, or leaving duplicate rows that made
+  `get_shop_by_url/1` raise `Ecto.MultipleResultsError`). Now exactly one load
+  exchanges; the others poll the shop row and build their session from the
+  persisted pair without contacting Shopify, and a first install inserts the
+  row once. A re-exchange of an existing shop is persisted with the same
+  `FOR UPDATE` compare `Shopifex.Auth.refresh/1` uses
+  (a `@doc false` `persist_token_pair/2` helper in `Shopifex.Auth`; the write no longer
+  goes through `Shopifex.Shops.update_shop/2`), so a pair written concurrently
+  is kept and `configure_webhooks` / `after_exchange` are skipped for the
+  superseded exchange. A load that cannot obtain or observe the lease within
+  `:token_refresh_wait_timeout_ms` (15 s default) logs a warning and exchanges
+  without coordination, as before. **The `shopifex_token_refresh_leases` table
+  is therefore required by the plug, not only by background refresh** (see
+  `docs/upgrading.md` §2).
+- **The plans page's Select request is authenticated outside the Shopify
+  admin.** With `payment_routes(shopify_embedded: false)` the plans page is
+  reached through the payment guard's path-bound `redirect_token`, but its
+  Select button POSTed only `plan_id` / `redirect_after`, relying on App
+  Bridge to attach the Bearer `id_token` — which it does only inside the admin
+  iframe. Every non-embedded plan selection therefore fell to the store
+  selector and the merchant could not pay (2.x posted a Guardian token in the
+  same request). `ShopifexWeb.PaymentHTML.select_plan_path/1` now appends a
+  `redirect_token` bound to the shop and to `/payment/select-plan` (valid for
+  one hour) to the fetch URL when the page was authenticated without an
+  `id_token`; `Shopifex.Plug.ShopifySession` accepts it there and nowhere
+  else, so a captured page can at most start a pending charge the merchant
+  must still approve. `Shopifex.Plug.sign_redirect/3` gains a `:max_age`
+  option (default still 90 s) and embeds an explicit `exp` claim that
+  `verify_redirect/2` enforces; tokens signed before this change (no `exp`)
+  are rejected. Embedded pages render byte-identical output. If you override
+  `render_plans/3` with your own template, POST to `select_plan_path(conn)`.
 - **`Shopifex.Plug.FetchFlash` works on Phoenix 1.8.** It now delegates to
   `Phoenix.Controller.fetch_flash/2` — on Phoenix 1.7+ the plug it wrapped was
   a no-op and a subsequent `put_flash` raised.
@@ -344,7 +428,7 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   token aged into the refresh window — never, for a legacy nil-expiry shop.
 - **`Shopifex.Plug.PaymentGuard`'s redirect stays authenticated without an
   App Bridge token.** The redirect to `/payment/show-plans` now carries a
-  short-lived `redirect_token` (`Shopifex.Plug.sign_redirect/2`, 90 s) bound
+  short-lived `redirect_token` (`Shopifex.Plug.sign_redirect/3`, 90 s) bound
   to the plans path, in addition to forwarding an `id_token` as `token` when
   one is present. `Shopifex.Plug.ShopifySession` accepts the token only at the
   path signed into it, so a captured link cannot authenticate any other route
@@ -354,6 +438,10 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Changed
 
+- **Webhook reconciliation lists up to 250 subscriptions** (Shopify's maximum
+  page size) instead of 100, so a topic past the first page is not re-created
+  and delivered twice. The list is per app and per shop and Shopifex creates
+  one subscription per configured topic, so the query is not paginated.
 - The default Shopify Admin GraphQL API version is `2026-07`
   (`config :shopifex, :api_version`).
 - **Billing mutations no longer send `@idempotent`.** Shopify does not document

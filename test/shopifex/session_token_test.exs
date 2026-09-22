@@ -61,6 +61,32 @@ defmodule Shopifex.SessionTokenTest do
     assert {:error, :invalid_destination} = SessionToken.verify(token)
   end
 
+  test "rejects a destination that only ends with .myshopify.com" do
+    # `dest` is validated with the same anchored pattern as the install `shop`
+    # param, so a suffix match alone (which `String.ends_with?/2` accepted) is
+    # not enough to reach the token-exchange URL built from it.
+    for dest <- [
+          "https://evil.example#.myshopify.com",
+          "https://evil.example/x?.myshopify.com",
+          "https://.myshopify.com"
+        ] do
+      token = sign(valid_claims(%{"dest" => dest}))
+      assert {:error, :invalid_destination} = SessionToken.verify(token)
+    end
+  end
+
+  test "accepts a hyphenated, mixed-case shop handle" do
+    token =
+      sign(
+        valid_claims(%{
+          "dest" => "https://Shop-1.myshopify.com",
+          "iss" => "https://Shop-1.myshopify.com/admin"
+        })
+      )
+
+    assert {:ok, _claims} = SessionToken.verify(token)
+  end
+
   test "rejects a wrong audience" do
     token = sign(valid_claims(%{"aud" => "someone-elses-api-key"}))
     assert {:error, :invalid_audience} = SessionToken.verify(token, @shop)

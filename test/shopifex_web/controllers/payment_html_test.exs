@@ -46,4 +46,26 @@ defmodule ShopifexWeb.PaymentHTMLTest do
       refute PaymentHTML.current_plan?([], plan)
     end
   end
+
+  describe "select_plan_path/1" do
+    @shop %ShopifexDummy.Shop{url: "path.myshopify.com"}
+
+    test "is the bare path when the page was authenticated with an id_token", %{conn: conn} do
+      conn = Shopifex.Test.put_shopify_session(conn, @shop)
+
+      assert PaymentHTML.select_plan_path(conn) == "/payment/select-plan"
+    end
+
+    test "carries a redirect_token bound to select-plan when there is no id_token", %{conn: conn} do
+      conn = Shopifex.Plug.build_session(conn, @shop, nil)
+      refute Shopifex.Plug.session_token(conn)
+
+      %URI{path: "/payment/select-plan", query: query} =
+        conn |> PaymentHTML.select_plan_path() |> URI.parse()
+
+      assert %{"redirect_token" => token} = URI.decode_query(query)
+      assert Shopifex.Plug.verify_redirect(token, "/payment/select-plan") == {:ok, @shop.url}
+      assert Shopifex.Plug.verify_redirect(token, "/payment/show-plans") == :error
+    end
+  end
 end
