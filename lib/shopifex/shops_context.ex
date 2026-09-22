@@ -143,9 +143,13 @@ defmodule Shopifex.ShopsContext do
       """
       @spec get_current_webhooks(shop :: shop()) :: {:ok, list()} | any()
       def get_current_webhooks(shop) do
+        # 250 is Shopify's maximum page size. Shopifex registers one
+        # subscription per configured topic and this list is per app and per
+        # shop, so a single page covers every supported configuration; the
+        # query is not paginated.
         query = """
         query {
-          webhookSubscriptions(first: 100) {
+          webhookSubscriptions(first: 250) {
             edges {
               node {
                 id

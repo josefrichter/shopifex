@@ -435,6 +435,10 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Changed
 
+- **Webhook reconciliation lists up to 250 subscriptions** (Shopify's maximum
+  page size) instead of 100, so a topic past the first page is not re-created
+  and delivered twice. The list is per app and per shop and Shopifex creates
+  one subscription per configured topic, so the query is not paginated.
 - The default Shopify Admin GraphQL API version is `2026-07`
   (`config :shopifex, :api_version`).
 - **Billing mutations no longer send `@idempotent`.** Shopify does not document

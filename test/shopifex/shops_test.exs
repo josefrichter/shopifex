@@ -90,6 +90,9 @@ defmodule Shopifex.ShopsTest do
 
       cond do
         String.contains?(query, "webhookSubscriptions(first") ->
+          # Shopify's maximum page size; a smaller page could miss a topic and
+          # re-create it (duplicate deliveries).
+          assert query =~ "webhookSubscriptions(first: 250)"
           Req.Test.json(conn, %{"data" => %{"webhookSubscriptions" => %{"edges" => edges}}})
 
         String.contains?(query, "webhookSubscriptionCreate") ->
