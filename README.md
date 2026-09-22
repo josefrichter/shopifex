@@ -374,7 +374,12 @@ and `@session_token` without redirecting when no shop is in the session.
 With managed installation, **change your access scopes in `shopify.app.toml`**
 (`[access_scopes]`) and deploy your app config — Shopify grants the updated
 scopes when the merchant next opens the app. Update `config :shopifex, :scopes`
-to match. On the next embedded load, `:managed_install` sees that the shop's
+to match. Both the config value and the shop's stored `scope` are normalised
+with `Shopifex.Scopes.split/1` before they are compared: whitespace around
+scope names is ignored and empty segments are dropped, so
+`"read_products, write_products"` matches Shopify's
+`"read_products,write_products"` grant, and an empty or `nil` `:scopes` config
+requires nothing from `Shopifex.Plug.EnsureScopes`. On the next embedded load, `:managed_install` sees that the shop's
 stored `scope` lacks a configured scope and re-exchanges the `id_token`, which
 persists Shopify's current grant. If the grant is still short (the merchant has
 not approved the new scopes), `Shopifex.Plug.EnsureScopes` **raises** an

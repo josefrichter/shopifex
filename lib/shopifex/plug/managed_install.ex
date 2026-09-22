@@ -257,16 +257,11 @@ defmodule Shopifex.Plug.ManagedInstall do
   # returns Shopify's current grant, which `TokenResponse` persists. If the
   # grant is still short, `EnsureScopes` raises as before.
   defp scopes_missing?(shop) do
-    required = split_scopes(Application.get_env(:shopifex, :scopes, ""))
-    granted = split_scopes(Shopifex.Shops.get_scope(shop))
+    required = Application.get_env(:shopifex, :scopes)
+    granted = Shopifex.Shops.get_scope(shop)
 
-    required -- granted != []
+    Shopifex.Scopes.missing(required, granted) != []
   end
-
-  defp split_scopes(nil), do: []
-
-  defp split_scopes(scopes) when is_binary(scopes),
-    do: scopes |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
 
   # Staleness is measured against `token_expires_at` — the token's actual lifetime
   # — NOT the row's `updated_at`, which any unrelated shop update would reset (an

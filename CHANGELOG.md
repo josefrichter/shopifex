@@ -178,6 +178,10 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Added
 
+- `Shopifex.Scopes` — `split/1` (comma-separated string, list, or `nil` → a
+  trimmed list with empty segments dropped) and `missing/2` (required scopes
+  the grant lacks, in required order), the shared scope-list parser behind
+  `Shopifex.Plug.EnsureScopes` and `Shopifex.Plug.ManagedInstall`.
 - `Shopifex.Auth` — background offline-token refresh: proactive refresh
   within a 5-minute safety window (`fresh_token/1`), reactive refresh on a
   401, and cross-node concurrency safety via a dedicated
@@ -295,6 +299,19 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Fixed
 
+- **`Shopifex.Plug.EnsureScopes` normalises scope lists before comparing
+  them.** `config :shopifex, :scopes` and the shop's stored `scope` were split
+  with a bare `String.split/2`, so an empty `:scopes` config raised on every
+  request under the new `:raise` default (the "missing" scope was `""`), a
+  `nil` config crashed with a `FunctionClauseError`, and
+  `"read_products, write_products"` (space after the comma) never matched
+  Shopify's `"read_products,write_products"`; the legacy `:redirect` also sent
+  `scope=,` for an empty config. `EnsureScopes` and
+  `Shopifex.Plug.ManagedInstall` (which already trimmed) now both parse
+  through `Shopifex.Scopes.split/1`: whitespace around scope names is ignored,
+  empty segments are dropped, and an empty or `nil` `:scopes` config requires
+  nothing. Missing scopes are reported trimmed, and the `:required_scopes`
+  plug option also accepts a list of scope names.
 - **Managed install: concurrent embedded loads no longer race the token
   exchange.** `Shopifex.Plug.ManagedInstall` now takes the per-shop
   `Shopifex.TokenRefreshLease` (the lease `Shopifex.Auth.refresh/1` already
