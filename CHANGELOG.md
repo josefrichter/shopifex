@@ -85,6 +85,12 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Security
 
+- **`Shopifex.SessionToken` validates the `dest` host with the anchored
+  `Shopifex.ShopDomain.valid?/1` pattern** that `initialize_installation`
+  already applies to the unsigned `shop` param, instead of a `.myshopify.com`
+  suffix check. `dest` is inside the signed token, so this is defence in depth
+  for the host that is interpolated into the token-exchange URL and stored as
+  the shop's `url`.
 - HMAC comparisons use constant-time `Plug.Crypto.secure_compare/2` everywhere
   (`ValidateHmac`, `ShopifyWebhook`, `ShopifySession`), and computed HMAC values
   are no longer logged on failure.

@@ -7,8 +7,9 @@ defmodule Shopifex.SessionToken do
 
   - the signature is valid (HS256 only — no algorithm confusion),
   - the audience (`aud`) equals your app's API key,
-  - the destination (`dest`) is the `*.myshopify.com` shop (and matches the
-    expected shop when one is supplied),
+  - the destination (`dest`) is a well-formed `*.myshopify.com` shop domain
+    (`Shopifex.ShopDomain.valid?/1`; it matches the expected shop when one is
+    supplied),
   - the issuer (`iss`) is `\#{dest}/admin`,
   - the token is within its (very short, ~60s) validity window.
 
@@ -115,8 +116,11 @@ defmodule Shopifex.SessionToken do
   defp audience_matches?(audience, api_key) when is_list(audience), do: api_key in audience
   defp audience_matches?(_, _), do: false
 
-  defp valid_destination?("https://" <> shop_url),
-    do: String.ends_with?(shop_url, ".myshopify.com")
+  # Same anchored pattern `AuthController.initialize_installation/2` applies to
+  # the unsigned `shop` param, so a `dest` like `evil.example#.myshopify.com`
+  # never reaches the token-exchange URL or `Shops.get_url/1`. Defence in
+  # depth: `dest` is inside the signed JWT, so it takes the app secret to forge.
+  defp valid_destination?("https://" <> shop_url), do: Shopifex.ShopDomain.valid?(shop_url)
 
   defp valid_destination?(_), do: false
 
