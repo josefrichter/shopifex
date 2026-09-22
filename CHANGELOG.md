@@ -85,6 +85,16 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Security
 
+- **`complete_payment/2` validates its params before consuming the charge
+  binding, and restores the binding on any exception.** The signed binding was
+  popped from the store before `plan_id` was compared with `to_string/1`, so an
+  unauthenticated `?plan_id[x]=y` (a map) with a pending charge id and the
+  public shop domain raised after the pop, skipped the restore-on-error
+  branch, and left the merchant's own confirmation with no binding and no
+  grant. `charge_id`, `plan_id` and `shop` must now be strings before the
+  store is touched (Shopify's return URL always sends strings), and an
+  exception raised after the pop (for example a plan deleted while the charge
+  was pending) puts the binding back before re-raising.
 - **Non-string query params are rejected before HMAC and timestamp checks.**
   A bracket-syntax param (`?timestamp[x]=y`, `?foo[x]=y`) parses to a map.
   `Shopifex.Plug.validate_timestamp/2` called `to_string/1` on it and the

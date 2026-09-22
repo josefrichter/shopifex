@@ -95,6 +95,96 @@ defmodule ShopifexWeb.PaymentControllerCompleteTest do
     end
   end
 
+  describe "non-string params" do
+    # Plug parses bracket syntax (`plan_id[x]=y`) into maps/lists. None of these
+    # may consume the binding: a scanner who knows a pending charge id and the
+    # public shop domain must not be able to make the merchant's own
+    # confirmation land on "no entry".
+    test "a map-valued plan_id with the correct shop returns 403 and keeps the binding", %{
+      conn: conn,
+      shop: shop,
+      plan: plan
+    } do
+      charge_id = 111_222_333
+      ShopifexWeb.PaymentController.bind_charge(shop, plan, charge_id, "/dashboard")
+
+      {result, _log} =
+        with_log(fn ->
+          get(conn, "/payment/complete?charge_id=#{charge_id}&shop=#{shop.url}&plan_id[x]=y")
+        end)
+
+      assert result.status == 403
+
+      stub_active_subscription("ACTIVE")
+
+      legit_conn =
+        ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+          "charge_id" => to_string(charge_id),
+          "plan_id" => to_string(plan.id),
+          "shop" => shop.url
+        })
+
+      assert legit_conn.status in [301, 302]
+      assert Enum.find(Shops.list_grants(), &(&1.charge_id == charge_id))
+    end
+
+    test "a list-valued plan_id, map-valued shop or map-valued charge_id returns 403 without raising",
+         %{conn: conn, shop: shop, plan: plan} do
+      charge_id = 222_333_444
+      ShopifexWeb.PaymentController.bind_charge(shop, plan, charge_id, "/dashboard")
+
+      for query <- [
+            "charge_id=#{charge_id}&shop=#{shop.url}&plan_id[]=#{plan.id}",
+            "charge_id=#{charge_id}&shop[x]=y&plan_id=#{plan.id}",
+            "charge_id[x]=y&shop=#{shop.url}&plan_id=#{plan.id}",
+            "charge_id[]=#{charge_id}&shop=#{shop.url}&plan_id=#{plan.id}"
+          ] do
+        {result, _log} = with_log(fn -> get(conn, "/payment/complete?" <> query) end)
+        assert result.status == 403
+      end
+
+      # The binding is still there for the legitimate confirmation.
+      stub_active_subscription("ACTIVE")
+
+      legit_conn =
+        ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+          "charge_id" => to_string(charge_id),
+          "plan_id" => to_string(plan.id),
+          "shop" => shop.url
+        })
+
+      assert legit_conn.status in [301, 302]
+      assert Enum.find(Shops.list_grants(), &(&1.charge_id == charge_id))
+    end
+  end
+
+  describe "raise after the binding was popped" do
+    test "a plan deleted while the charge was pending re-raises but restores the binding", %{
+      conn: conn,
+      shop: shop,
+      plan: plan
+    } do
+      charge_id = 333_444_555
+      ShopifexWeb.PaymentController.bind_charge(shop, plan, charge_id, "/dashboard")
+
+      # The default `get_plan/1` is `Shops.get_plan!/1`, which raises once the
+      # row is gone — after `store.get/1` already consumed the binding.
+      ShopifexDummy.Repo.delete!(plan)
+
+      assert_raise Ecto.NoResultsError, fn ->
+        with_log(fn ->
+          ShopifexDummyWeb.PaymentController.complete_payment(conn, %{
+            "charge_id" => to_string(charge_id),
+            "plan_id" => to_string(plan.id),
+            "shop" => shop.url
+          })
+        end)
+      end
+
+      assert Shopifex.RedirectAfterAgent.get(charge_id) != nil
+    end
+  end
+
   describe "charge binding verification" do
     test "plain redirect string in store (legacy) is rejected with 403 and actionable log", %{
       conn: conn,
