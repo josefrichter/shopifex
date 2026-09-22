@@ -74,7 +74,10 @@ defmodule Shopifex.Plug.ManagedInstall do
 
   def init(opts), do: opts
 
-  def call(%{params: %{"id_token" => id_token, "shop" => shop_url}} = conn, _opts) do
+  # Non-binary params (`?shop[a]=b`) fall through to the no-op clause: nothing
+  # below could verify them, and interpolating a map into the log would raise.
+  def call(%{params: %{"id_token" => id_token, "shop" => shop_url}} = conn, _opts)
+      when is_binary(id_token) and is_binary(shop_url) do
     case Shopifex.SessionToken.verify(id_token, shop_url) do
       {:ok, _claims} ->
         load_or_exchange_shop(conn, id_token, shop_url)

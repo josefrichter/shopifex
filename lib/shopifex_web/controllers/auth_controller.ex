@@ -132,6 +132,10 @@ defmodule ShopifexWeb.AuthController do
 
       def initialize_installation(conn, %{"shop" => shop_url} = params) do
         if Shopifex.ShopDomain.valid?(shop_url) do
+          # A bracket-syntax `state[a]=b` parses to a map, which
+          # `URI.encode_query/1` rejects; only a string state is forwarded.
+          state = if is_binary(params["state"]), do: params["state"], else: nil
+
           # The installation case and reinstallation case share the same URL, and query parameters,
           # except for the value of of the redirect_uri
           url = fn redirect_uri ->
@@ -139,7 +143,7 @@ defmodule ShopifexWeb.AuthController do
               client_id: Application.fetch_env!(:shopifex, :api_key),
               scope: Application.fetch_env!(:shopifex, :scopes),
               redirect_uri: redirect_uri,
-              state: params["state"]
+              state: state
             })
           end
 

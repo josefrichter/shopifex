@@ -54,4 +54,20 @@ defmodule ShopifexDummyWeb.ProxyControllerTest do
 
     assert response(conn, 200) =~ "no shop"
   end
+
+  test "a map-valued timestamp is rejected with 401, never a raised 500", %{
+    conn: conn,
+    shop: shop
+  } do
+    conn = get(conn, "/proxy?shop=#{shop.url}&timestamp[x]=y&signature=deadbeef")
+
+    assert response(conn, 401)
+  end
+
+  test "a map-valued param next to a signature is rejected with 401", %{conn: conn, shop: shop} do
+    fresh = System.system_time(:second)
+    conn = get(conn, "/proxy?shop=#{shop.url}&timestamp=#{fresh}&foo[x]=y&signature=deadbeef")
+
+    assert response(conn, 401)
+  end
 end

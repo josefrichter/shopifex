@@ -85,6 +85,18 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Security
 
+- **Non-string query params are rejected before HMAC and timestamp checks.**
+  A bracket-syntax param (`?timestamp[x]=y`, `?foo[x]=y`) parses to a map.
+  `Shopifex.Plug.validate_timestamp/2` called `to_string/1` on it and the
+  query-HMAC computation interpolated every value before any signature check,
+  so unauthenticated input answered `500` instead of `401` on the
+  `:shopify_proxy`, `:validate_install_hmac`, `:shopify_admin_link` and
+  `:shopify_session` pipelines. `validate_timestamp/2` now returns
+  `{:error, "malformed timestamp"}` for a non-string, non-integer value, and
+  `Shopifex.Plug.hmac_matches?/2` returns `false` without computing anything
+  unless every query value is a string (`ids`: a list of strings).
+  `Shopifex.Plug.ManagedInstall` ignores non-string `id_token` / `shop`
+  params, and `initialize_installation/2` forwards only a string `state`.
 - **`Shopifex.SessionToken` validates the `dest` host with the anchored
   `Shopifex.ShopDomain.valid?/1` pattern** that `initialize_installation`
   already applies to the unsigned `shop` param, instead of a `.myshopify.com`

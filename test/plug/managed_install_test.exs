@@ -373,6 +373,19 @@ defmodule Shopifex.Plug.ManagedInstallTest do
     assert Shopifex.Plug.current_shop(conn) == nil
   end
 
+  test "non-binary shop or id_token: no-op instead of raising" do
+    for params <- [
+          %{"id_token" => "not-a-jwt", "shop" => %{"a" => "b"}},
+          %{"id_token" => %{"a" => "b"}, "shop" => @shop},
+          %{"id_token" => ["x"], "shop" => @shop}
+        ] do
+      conn = ManagedInstall.call(conn_with(params), [])
+
+      refute_received :token_exchanged
+      assert Shopifex.Plug.current_shop(conn) == nil
+    end
+  end
+
   test "no id_token: passes the conn through untouched" do
     conn = ManagedInstall.call(conn_with(%{"shop" => @shop}), [])
 
