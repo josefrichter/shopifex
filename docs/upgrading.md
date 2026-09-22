@@ -57,8 +57,13 @@ modify :scope, :string, null: true, from: {:string, null: false}
 (Replace `:shops` with your table name — the 2.x installer used
 `:shopify_shops`.)
 
-Add the cross-node refresh-token lease table (background/reactive token
-refresh in `Shopifex.Auth` requires it):
+Add the cross-node token lease table. It is required by
+`Shopifex.Plug.ManagedInstall` as well as by background/reactive refresh in
+`Shopifex.Auth`: the plug takes the per-shop lease around every `id_token`
+exchange so concurrent embedded loads of one shop exchange once (and a first
+install inserts the shop once), and the same lease serializes refresh-token
+grants. Without the table every load that needs an exchange raises on the
+missing relation:
 
 ```
 mix ecto.gen.migration create_shopifex_token_refresh_leases

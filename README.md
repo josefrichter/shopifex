@@ -94,8 +94,10 @@ mix ecto.migrate
 The four token columns are nullable — legacy/non-expiring installs round-trip with
 `nil` expiry values. (`mix shopifex.install` generates this schema for you.)
 
-Background refresh also needs a short-lived, cross-node lease table. New
-`mix shopifex.install` migrations include it. When upgrading an existing app,
+Managed install and background refresh also need a short-lived, cross-node
+lease table: `Shopifex.Plug.ManagedInstall` takes a per-shop lease around
+every `id_token` exchange, and `Shopifex.Auth` around every refresh-token
+grant. New `mix shopifex.install` migrations include it. When upgrading an existing app,
 run `mix ecto.gen.migration create_shopifex_token_refresh_leases`, then add:
 
 ```elixir

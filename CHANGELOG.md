@@ -295,6 +295,28 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Fixed
 
+- **Managed install: concurrent embedded loads no longer race the token
+  exchange.** `Shopifex.Plug.ManagedInstall` now takes the per-shop
+  `Shopifex.TokenRefreshLease` (the lease `Shopifex.Auth.refresh/1` already
+  uses) around every `id_token` exchange. Two concurrent loads of a shop with
+  a stale token previously both exchanged and the last response to arrive was
+  persisted unconditionally, even when it had been issued first, leaving a
+  refresh token Shopify had already retired (background refresh then failed
+  until the next embedded load); two concurrent first loads both inserted the
+  shop (raising on the unique `url` index, or leaving duplicate rows that made
+  `get_shop_by_url/1` raise `Ecto.MultipleResultsError`). Now exactly one load
+  exchanges; the others poll the shop row and build their session from the
+  persisted pair without contacting Shopify, and a first install inserts the
+  row once. A re-exchange of an existing shop is persisted with the same
+  `FOR UPDATE` compare `Shopifex.Auth.refresh/1` uses
+  (a `@doc false` `persist_token_pair/2` helper in `Shopifex.Auth`; the write no longer
+  goes through `Shopifex.Shops.update_shop/2`), so a pair written concurrently
+  is kept and `configure_webhooks` / `after_exchange` are skipped for the
+  superseded exchange. A load that cannot obtain or observe the lease within
+  `:token_refresh_wait_timeout_ms` (15 s default) logs a warning and exchanges
+  without coordination, as before. **The `shopifex_token_refresh_leases` table
+  is therefore required by the plug, not only by background refresh** (see
+  `docs/upgrading.md` §2).
 - **The plans page's Select request is authenticated outside the Shopify
   admin.** With `payment_routes(shopify_embedded: false)` the plans page is
   reached through the payment guard's path-bound `redirect_token`, but its

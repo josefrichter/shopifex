@@ -508,45 +508,60 @@ defmodule Shopifex.Auth do
   end
 
   defp persist_refreshed_shop(shop, body) do
+    persist_token_pair(shop, fn locked_shop ->
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      scope_field = Shopifex.Shops.get_scope_field()
+
+      %{
+        access_token: body["access_token"],
+        token_expires_at: expires_at(now, body["expires_in"]),
+        refresh_token: body["refresh_token"],
+        refresh_token_expires_at: expires_at(now, body["refresh_token_expires_in"])
+      }
+      |> Map.put(scope_field, body["scope"] || Shopifex.Shops.get_scope(locked_shop))
+    end)
+  end
+
+  @doc false
+  @spec persist_token_pair(struct(), map() | (struct() -> map())) ::
+          {:ok, struct()} | {:ok, :superseded, struct()} | {:error, term()}
+  # Compare-and-persist for a token pair obtained from Shopify while no lock
+  # was held: `snapshot` is the shop as read *before* the HTTP call, `attrs`
+  # the fields to write (a map, or a function of the row as it is under the
+  # lock). The row is locked `FOR UPDATE`; if its token state no longer
+  # matches the snapshot, another writer (a managed-install exchange or a
+  # refresh) rotated the tokens in the meantime and their pair is kept,
+  # returning `{:ok, :superseded, current_row}` rather than clobbering it.
+  # Shared by `refresh/1` and `Shopifex.Plug.ManagedInstall`.
+  def persist_token_pair(snapshot, attrs) do
     schema = shop_schema()
 
     repo().transaction(fn ->
       locked_shop =
-        repo().one(from(s in schema, where: s.id == ^shop.id, lock: "FOR UPDATE"))
+        repo().one(from(s in schema, where: s.id == ^snapshot.id, lock: "FOR UPDATE"))
 
       cond do
         is_nil(locked_shop) ->
           repo().rollback(:shop_not_found)
 
-        # A concurrent managed-install exchange already rotated the tokens
-        # (e.g. the merchant opened the embedded app while this refresh was
-        # in flight). Their pair wins; ours is discarded rather than
-        # clobbering it.
-        token_state_changed?(locked_shop, shop) ->
+        # A concurrent writer already rotated the tokens (e.g. the merchant
+        # opened the embedded app while this refresh was in flight). Their
+        # pair wins; ours is discarded rather than clobbering it.
+        token_state_changed?(locked_shop, snapshot) ->
           {:superseded, locked_shop}
 
         true ->
-          now = DateTime.utc_now() |> DateTime.truncate(:second)
-          scope_field = Shopifex.Shops.get_scope_field()
-
-          attrs =
-            %{
-              access_token: body["access_token"],
-              token_expires_at: expires_at(now, body["expires_in"]),
-              refresh_token: body["refresh_token"],
-              refresh_token_expires_at: expires_at(now, body["refresh_token_expires_in"])
-            }
-            |> Map.put(scope_field, body["scope"] || Shopifex.Shops.get_scope(locked_shop))
+          attrs = if is_function(attrs, 1), do: attrs.(locked_shop), else: attrs
 
           case locked_shop |> schema.changeset(attrs) |> repo().update() do
-            {:ok, refreshed_shop} -> refreshed_shop
+            {:ok, persisted_shop} -> persisted_shop
             {:error, changeset} -> repo().rollback(changeset)
           end
       end
     end)
     |> case do
       {:ok, {:superseded, shop}} -> {:ok, :superseded, shop}
-      {:ok, refreshed_shop} -> {:ok, refreshed_shop}
+      {:ok, persisted_shop} -> {:ok, persisted_shop}
       {:error, reason} -> {:error, reason}
     end
   end
