@@ -6,9 +6,44 @@ defmodule ShopifexWeb.PaymentHTML do
 
   embed_templates("payment_html/*")
 
+  # A merchant may sit on the pricing page for a while before choosing a plan.
+  @plan_selection_max_age_seconds 3600
+
   def path_prefix, do: Application.get_env(:shopifex, :path_prefix, "")
   def api_key, do: Application.get_env(:shopifex, :api_key)
   def payment_guard, do: Application.get_env(:shopifex, :payment_guard)
+
+  @doc """
+  The URL the plans page's Select button POSTs `{plan_id, redirect_after}` to.
+
+  Inside the Shopify admin, App Bridge attaches the Bearer `id_token` to that
+  fetch, so a page that was authenticated with an `id_token` gets the bare
+  `/payment/select-plan` path. A page authenticated without one (the
+  non-embedded / legacy HMAC path, reached through the payment guard's
+  `redirect_token`) has nothing for App Bridge to attach, so the path carries
+  its own `redirect_token` from `Shopifex.Plug.sign_redirect/3`: signed for the
+  current shop, bound to this one path, and valid for
+  #{@plan_selection_max_age_seconds} seconds. Because the token authenticates
+  only this path for only this shop, a captured page can at most start a
+  pending charge that the merchant must still approve in Shopify.
+  """
+  @spec select_plan_path(Plug.Conn.t()) :: String.t()
+  def select_plan_path(%Plug.Conn{} = conn) do
+    path = path_prefix() <> "/payment/select-plan"
+
+    case Shopifex.Plug.session_token(conn) do
+      nil ->
+        token =
+          Shopifex.Plug.sign_redirect(shop_url(conn), path,
+            max_age: @plan_selection_max_age_seconds
+          )
+
+        path <> "?redirect_token=" <> URI.encode_www_form(token)
+
+      _id_token ->
+        path
+    end
+  end
 
   @doc "The plans available for `guard`, as schema structs, for server rendering."
   def plans_for_guard(%Plug.Conn{} = conn, guard) do

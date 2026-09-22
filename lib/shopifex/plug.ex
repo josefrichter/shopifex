@@ -210,29 +210,54 @@ defmodule Shopifex.Plug do
   @doc """
   Signs an app-issued redirect for `shop_url` that `Shopifex.Plug.ShopifySession`
   will accept **only** at `path` (the request path, without query) and only for
-  #{@redirect_max_age_seconds} seconds. Used by `Shopifex.Plug.PaymentGuard` so a
-  request authenticated without an App Bridge `id_token` (legacy HMAC / non-embedded)
-  still reaches the plans page.
+  `:max_age` seconds. Used by `Shopifex.Plug.PaymentGuard` so a request
+  authenticated without an App Bridge `id_token` (legacy HMAC / non-embedded)
+  still reaches the plans page, and by `ShopifexWeb.PaymentHTML.select_plan_path/1`
+  so that page's Select request can authenticate its POST the same way.
 
   The token is bound to one destination on purpose: it is not a Shopify-style
   query HMAC, so it cannot be replayed on other routes, and a guarded route will
   not mint a fresh one from it.
+
+  ## Options
+
+    * `:max_age` - seconds the token stays valid. Embedded in the token as an
+      explicit `exp` claim (and as the `Plug.Crypto` signing max age), so the
+      lifetime is fixed at signing time and `verify_redirect/2` needs no
+      per-call override. Defaults to #{@redirect_max_age_seconds}.
   """
-  @spec sign_redirect(String.t(), String.t()) :: String.t()
-  def sign_redirect(shop_url, path) when is_binary(shop_url) and is_binary(path) do
-    Plug.Crypto.sign(primary_secret(), @redirect_salt, %{shop_url: shop_url, path: path})
+  @spec sign_redirect(String.t(), String.t(), keyword()) :: String.t()
+  def sign_redirect(shop_url, path, opts \\ [])
+      when is_binary(shop_url) and is_binary(path) and is_list(opts) do
+    max_age = Keyword.get(opts, :max_age, @redirect_max_age_seconds)
+    exp = System.system_time(:second) + max_age
+
+    Plug.Crypto.sign(
+      primary_secret(),
+      @redirect_salt,
+      %{shop_url: shop_url, path: path, exp: exp},
+      max_age: max_age
+    )
   end
 
   @doc """
-  Verifies a token from `sign_redirect/2` against `path`, trying the rotated
-  `:old_secret` when set. Returns `{:ok, shop_url}` or `:error`.
+  Verifies a token from `sign_redirect/3` against `path`, trying the rotated
+  `:old_secret` when set. The lifetime the signer embedded applies: the token
+  must be within its `Plug.Crypto` max age **and** its `exp` claim must still
+  be in the future. A token without an `exp` claim is rejected. Returns
+  `{:ok, shop_url}` or `:error`.
   """
   @spec verify_redirect(term(), String.t()) :: {:ok, String.t()} | :error
   def verify_redirect(token, path) when is_binary(token) and is_binary(path) do
+    now = System.system_time(:second)
+
     Enum.find_value(secrets(), :error, fn secret ->
-      case Plug.Crypto.verify(secret, @redirect_salt, token, max_age: @redirect_max_age_seconds) do
-        {:ok, %{shop_url: shop_url, path: ^path}} -> {:ok, shop_url}
-        _ -> nil
+      case Plug.Crypto.verify(secret, @redirect_salt, token) do
+        {:ok, %{shop_url: shop_url, path: ^path, exp: exp}} when is_integer(exp) and exp > now ->
+          {:ok, shop_url}
+
+        _ ->
+          nil
       end
     end)
   end

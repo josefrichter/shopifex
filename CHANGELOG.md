@@ -295,6 +295,23 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
 
 ### Fixed
 
+- **The plans page's Select request is authenticated outside the Shopify
+  admin.** With `payment_routes(shopify_embedded: false)` the plans page is
+  reached through the payment guard's path-bound `redirect_token`, but its
+  Select button POSTed only `plan_id` / `redirect_after`, relying on App
+  Bridge to attach the Bearer `id_token` — which it does only inside the admin
+  iframe. Every non-embedded plan selection therefore fell to the store
+  selector and the merchant could not pay (2.x posted a Guardian token in the
+  same request). `ShopifexWeb.PaymentHTML.select_plan_path/1` now appends a
+  `redirect_token` bound to the shop and to `/payment/select-plan` (valid for
+  one hour) to the fetch URL when the page was authenticated without an
+  `id_token`; `Shopifex.Plug.ShopifySession` accepts it there and nowhere
+  else, so a captured page can at most start a pending charge the merchant
+  must still approve. `Shopifex.Plug.sign_redirect/3` gains a `:max_age`
+  option (default still 90 s) and embeds an explicit `exp` claim that
+  `verify_redirect/2` enforces; tokens signed before this change (no `exp`)
+  are rejected. Embedded pages render byte-identical output. If you override
+  `render_plans/3` with your own template, POST to `select_plan_path(conn)`.
 - **`Shopifex.Plug.FetchFlash` works on Phoenix 1.8.** It now delegates to
   `Phoenix.Controller.fetch_flash/2` — on Phoenix 1.7+ the plug it wrapped was
   a no-op and a subsequent `put_flash` raised.
@@ -369,7 +386,7 @@ branch has been published to Hex yet (the latest published release is 2.4.0).
   token aged into the refresh window — never, for a legacy nil-expiry shop.
 - **`Shopifex.Plug.PaymentGuard`'s redirect stays authenticated without an
   App Bridge token.** The redirect to `/payment/show-plans` now carries a
-  short-lived `redirect_token` (`Shopifex.Plug.sign_redirect/2`, 90 s) bound
+  short-lived `redirect_token` (`Shopifex.Plug.sign_redirect/3`, 90 s) bound
   to the plans path, in addition to forwarding an `id_token` as `token` when
   one is present. `Shopifex.Plug.ShopifySession` accepts the token only at the
   path signed into it, so a captured link cannot authenticate any other route

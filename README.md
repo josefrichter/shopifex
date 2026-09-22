@@ -169,7 +169,7 @@ Now the following pipelines are accessible:
 - `:shopify_admin_link` -> Validates Shopify admin link & bulk action link requests and makes session information available via `Shopifex.Plug` API.
 - `:shopify_api` -> Ensures that a valid Shopify session token is present in the `Authorization` header. Useful for async requests between your SPA front end and Shopifex backend.
 - `:shopify_proxy` -> Validates [App proxy](https://shopify.dev/docs/apps/build/online-store/display-dynamic-data) requests (signed with `signature`, not `hmac`) via `Shopifex.Plug.ValidateHmac, require_timestamp: true`, then resolves the shop with `Shopifex.Plug.LoadProxyShop`.
-- `:shopify_embedded` -> Runs `Shopifex.Plug.SetCSPHeader`, restricting app loading to within the Shopify admin. Included by default in `payment_routes/2`'s plan-selection pages (pass `shopify_embedded: false` to opt out).
+- `:shopify_embedded` -> Runs `Shopifex.Plug.SetCSPHeader`, restricting app loading to within the Shopify admin. Included by default in `payment_routes/2`'s plan-selection pages (pass `shopify_embedded: false` to opt out). With `shopify_embedded: false` the plans page authenticates its Select POST with a `redirect_token` bound to `/payment/select-plan` (valid for one hour) instead of App Bridge's Bearer `id_token`; if you override `render_plans/3` with your own template, POST to `ShopifexWeb.PaymentHTML.select_plan_path(conn)` so the credential is carried.
 - `:shopifex_browser` -> Same as your normal `:browser` pipeline, except it calls `Shopifex.Plug.LoadInIframe`.
 
 Now add this basic example of these plugs in action in `router.ex`. These endpoints need to be added to your Shopify app whitelist
